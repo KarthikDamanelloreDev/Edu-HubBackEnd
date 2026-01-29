@@ -43,7 +43,7 @@ const initiatePayment = async (userId, data) => {
     const totalAmount = cart.items.reduce((sum, item) => sum + (item.course?.price || 0), 0);
 
     // 2. Create Transaction Record
-    const transactionId = `TXN${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    const transactionId = `TXN${Date.now()}${Math.floor(Math.random() * 10)}`; // Shortened slightly
 
     const transaction = new Transaction({
         user: userId,
@@ -165,49 +165,59 @@ const initiatePayment = async (userId, data) => {
         if (!key || !secret) throw new Error('EnKash configuration missing');
 
         try {
-            console.log("[EnKash] Step 1: Generating Auth Token...");
+            // STEP 1: Generate Authorization Token
+            // Using API-Key in header and clean body
             const tokenResponse = await fetch(`${baseUrl}/merchant/token`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'API-Key': key },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'API-Key': key
+                },
                 body: JSON.stringify({ accessKey: key, secretKey: secret })
             });
 
             const tokenResult = await tokenResponse.json();
             if (!tokenResult.token) {
-                console.error("[EnKash] Token Error:", tokenResult);
-                throw new Error("Failed to generate EnKash auth token");
+                throw new Error(tokenResult.message || tokenResult.resultMessage || "Failed to generate EnKash auth token");
             }
             const accessToken = tokenResult.token;
 
-            console.log("[EnKash] Step 2: Creating Order...");
+            // STEP 2: Create Order
+            // Some versions of EnKash PG use merchantOrderId and separate amount/currency fields
+            const orderPayload = {
+                orderId: transactionId,
+                amount: {
+                    value: totalAmount.toFixed(2),
+                    currency: "INR"
+                },
+                returnUrl: REDIRECT_URLS.frontendSuccess,
+                notifyUrl: REDIRECT_URLS.callback,
+                customerInfo: {
+                    firstName: firstName,
+                    lastName: data.customerDetails.lastName || "User",
+                    email: email,
+                    phoneNumber: phone
+                },
+                description: productInfo
+            };
+
             const orderResponse = await fetch(`${baseUrl}/orders`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${accessToken}`
                 },
-                body: JSON.stringify({
-                    orderId: transactionId,
-                    amount: { value: totalAmount.toFixed(2), currency: "INR" },
-                    returnUrl: REDIRECT_URLS.frontendSuccess, // EnKash redirects here after checkout
-                    notifyUrl: REDIRECT_URLS.callback,
-                    customerInfo: {
-                        firstName: firstName,
-                        lastName: data.customerDetails.lastName || "",
-                        email: email,
-                        phoneNumber: phone
-                    },
-                    description: productInfo
-                })
+                body: JSON.stringify(orderPayload)
             });
 
             const orderResult = await orderResponse.json();
-            if (!orderResult.orderId) {
-                console.error("[EnKash] Order Error:", orderResult);
-                throw new Error("Failed to create EnKash order");
+            // Check for orderId or order_id or status: success
+            if (!orderResult.orderId && !orderResult.order_id && orderResult.resultCode !== 1) {
+                const errorMsg = orderResult.message || orderResult.resultMessage || JSON.stringify(orderResult);
+                throw new Error(`EnKash Order Error: ${errorMsg}`);
             }
 
-            console.log("[EnKash] Step 3: Initiating Payment (HOSTED mode)...");
+            // STEP 3: Initiate Payment (HOSTED mode to get redirection URL)
             const paymentResponse = await fetch(`${baseUrl}/payments`, {
                 method: 'POST',
                 headers: {
@@ -221,22 +231,21 @@ const initiatePayment = async (userId, data) => {
             });
 
             const paymentResult = await paymentResponse.json();
-            if (paymentResult.redirectionUrl) {
-                console.log("[EnKash] Success! Redirecting to:", paymentResult.redirectionUrl);
+            if (paymentResult.redirectionUrl || paymentResult.redirection_url) {
                 return {
                     status: 'success',
                     data: {
-                        paymentLink: paymentResult.redirectionUrl
+                        paymentLink: paymentResult.redirectionUrl || paymentResult.redirection_url
                     }
                 };
             } else {
-                console.error("[EnKash] Payment Initiation Error:", paymentResult);
-                throw new Error(paymentResult.message || "Failed to initiate EnKash hosted payment");
+                const errorMsg = paymentResult.message || paymentResult.resultMessage || JSON.stringify(paymentResult);
+                throw new Error(`EnKash Payment Exception: ${errorMsg}`);
             }
 
         } catch (error) {
-            console.error("[EnKash] Flow Exception:", error);
-            throw new Error(`EnKash Error: ${error.message}`);
+            console.error("[EnKash] Detailed Error:", error.message);
+            throw new Error(error.message);
         }
     }
 
