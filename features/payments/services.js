@@ -151,6 +151,7 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
         if (!key || !secret) throw new Error('EnKash configuration missing');
 
         try {
+            // STEP 1: Generate Authorization Token
             const tokenResponse = await fetch(`${baseUrl}/merchant/token`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'API-Key': key },
@@ -166,16 +167,19 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
 
             const commonHeaders = {
                 'Content-Type': 'application/json',
-                'Authorization': token,
+                'Authorization': `Bearer ${token}`, // Defaulting to Bearer for EnKash Corporate
                 'merchantAccessKey': key,
+                'mid': key, // Adding mid to headers
                 'API-Key': key,
                 'x-auth-token': token
             };
 
+            // STEP 2: Create Order
             const orderResponse = await fetch(`${baseUrl}/orders`, {
                 method: 'POST',
                 headers: commonHeaders,
                 body: JSON.stringify({
+                    mid: key, // Adding mid to body as well
                     orderId: transactionId,
                     amount: { value: totalAmount.toFixed(2), currency: "INR" },
                     returnUrl: REDIRECT_URLS.frontendSuccess,
@@ -185,20 +189,23 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
                         lastName: data.customerDetails.lastName || "User",
                         email: email,
                         phoneNumber: phone,
-                        customerIpAddress: ipAddress // Required field
+                        customerIpAddress: ipAddress
                     },
                     description: productInfo
                 })
             });
 
-            const orderResult = await orderResponse.json();
+            let orderResult = await orderResponse.json();
 
-            if (orderResult.response_code === 117 || orderResult.payload === "Token is invalid.") {
-                commonHeaders['Authorization'] = `Bearer ${token}`;
-                const retryResponse = await fetch(`${baseUrl}/orders`, {
+            // Retry logic for Token 117 if needed, but error is 165 now.
+            if (!orderResult.orderId && !orderResult.order_id && orderResult.resultCode !== 1) {
+                // Try mapping key to merchantId if mid is rejected
+                console.log("[EnKash] Retrying with merchantId mapping...");
+                const secondOrderResponse = await fetch(`${baseUrl}/orders`, {
                     method: 'POST',
                     headers: commonHeaders,
                     body: JSON.stringify({
+                        merchantId: key,
                         orderId: transactionId,
                         amount: { value: totalAmount.toFixed(2), currency: "INR" },
                         returnUrl: REDIRECT_URLS.frontendSuccess,
@@ -213,18 +220,19 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
                         description: productInfo
                     })
                 });
-                const retryResult = await retryResponse.json();
-                if (!retryResult.orderId && !retryResult.order_id && retryResult.resultCode !== 1) {
-                    throw new Error(`EnKash Order Error: ${retryResult.message || retryResult.resultMessage || JSON.stringify(retryResult)}`);
-                }
-            } else if (!orderResult.orderId && !orderResult.order_id && orderResult.resultCode !== 1) {
+                orderResult = await secondOrderResponse.json();
+            }
+
+            if (!orderResult.orderId && !orderResult.order_id && orderResult.resultCode !== 1) {
                 throw new Error(`EnKash Order Error: ${orderResult.message || orderResult.resultMessage || JSON.stringify(orderResult)}`);
             }
 
+            // STEP 3: Initiate Payment
             const paymentResponse = await fetch(`${baseUrl}/payments`, {
                 method: 'POST',
                 headers: commonHeaders,
                 body: JSON.stringify({
+                    mid: key, // Adding mid to submission
                     orderId: transactionId,
                     paymentMode: "HOSTED"
                 })
