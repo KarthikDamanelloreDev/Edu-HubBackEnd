@@ -16,7 +16,9 @@ const PAYMENT_CONFIG = {
     easebuzz: {
         key: process.env.EASEBUZZ_KEY,
         salt: process.env.EASEBUZZ_SALT,
-        initiateUrl: 'https://pay.easebuzz.in/payment/initiate'
+        env: process.env.EASEBUZZ_ENV || 'prod', // Default to prod
+        initiateUrl: (process.env.EASEBUZZ_ENV === 'prod') ? 'https://pay.easebuzz.in/payment/initiateLink' : 'https://testpay.easebuzz.in/payment/initiateLink',
+        payUrl: (process.env.EASEBUZZ_ENV === 'prod') ? 'https://pay.easebuzz.in/pay/' : 'https://testpay.easebuzz.in/pay/'
     },
     enkash: {
         key: process.env.ENKASH_KEY,
@@ -64,7 +66,6 @@ const initiatePayment = async (userId, data) => {
     if (data.paymentMethod === 'payu') {
         const { key, salt, formUrl } = PAYMENT_CONFIG.payu;
         if (!key || !salt) throw new Error('PayU configuration missing');
-        // Hash Sequence: key|txnid|amount|productinfo|firstname|email|udf1|udf2|udf3|udf4|udf5||||||salt
         const hashString = `${key}|${transactionId}|${totalAmount.toFixed(2)}|${productInfo}|${firstName}|${email}|||||||||||${salt}`;
         const hash = crypto.createHash('sha512').update(hashString).digest('hex');
 
@@ -90,10 +91,11 @@ const initiatePayment = async (userId, data) => {
     }
 
     if (data.paymentMethod === 'easebuzz') {
-        const { key, salt, initiateUrl } = PAYMENT_CONFIG.easebuzz;
+        const { key, salt, initiateUrl, payUrl } = PAYMENT_CONFIG.easebuzz;
         if (!key || !salt) throw new Error('EaseBuzz configuration missing');
 
-        // Hash for Easebuzz (Must contain 10 UDFs)
+        // Exact Hash Sequence from Easebuzz Node.js Library:
+        // key|txnid|amount|productinfo|firstname|email|udf1|udf2|udf3|udf4|udf5|udf6|udf7|udf8|udf9|udf10|salt
         const hashString = `${key}|${transactionId}|${totalAmount.toFixed(2)}|${productInfo}|${firstName}|${email}|||||||||||${salt}`;
         const hash = crypto.createHash('sha512').update(hashString).digest('hex');
 
@@ -108,9 +110,11 @@ const initiatePayment = async (userId, data) => {
         formData.append('surl', REDIRECT_URLS.callback);
         formData.append('furl', REDIRECT_URLS.callback);
         formData.append('hash', hash);
+        // Add empty UDFs to be explicit if needed by some older versions of the API
+        for (let i = 1; i <= 10; i++) formData.append(`udf${i}`, '');
 
         try {
-            console.log("Initiating server-to-server call to Easebuzz...");
+            console.log(`[Easebuzz] Initiating to: ${initiateUrl}`);
             const response = await fetch(initiateUrl, {
                 method: 'POST',
                 headers: {
@@ -123,19 +127,21 @@ const initiatePayment = async (userId, data) => {
             const result = await response.json();
 
             if (result.status === 1 && result.data) {
-                // Success - returns access_key
+                // Easebuzz returns an access_key in result.data
+                const accessKey = result.data;
+                console.log(`[Easebuzz] Successfully obtained access_key: ${accessKey}`);
                 return {
                     status: 'success',
                     data: {
-                        paymentLink: `https://pay.easebuzz.in/pay/${result.data}`
+                        paymentLink: `${payUrl}${accessKey}`
                     }
                 };
             } else {
-                console.error("Easebuzz API Error Response:", result);
-                throw new Error(result.error_desc || result.message || "Could not initiate Easebuzz payment. Please check your credentials.");
+                console.error("[Easebuzz] API Error Result:", result);
+                throw new Error(result.error_desc || result.data || result.message || "Failed to obtain payment access key from Easebuzz.");
             }
         } catch (error) {
-            console.error("Easebuzz Initiation Exception:", error);
+            console.error("[Easebuzz] Request Exception:", error);
             throw new Error(`Easebuzz Error: ${error.message}`);
         }
     }
@@ -189,10 +195,8 @@ const initiatePayment = async (userId, data) => {
     }
 
     if (data.paymentMethod === 'enkash') {
-        const { key, secret } = PAYMENT_CONFIG.enkash;
+        const { key } = PAYMENT_CONFIG.enkash;
         if (!key) throw new Error('EnKash configuration missing');
-
-        // EnKash fallback simple redirect (if they support it)
         return {
             status: 'success',
             data: {
@@ -215,13 +219,10 @@ const verifyPayment = async (userId, data) => {
         return { status: 'success', message: 'Payment already verified' };
     }
 
-    // In production, you would ideally verify the status with the gateway API here
-
     transaction.status = 'success';
     transaction.gatewayResponse = data;
     await transaction.save();
 
-    // Clear cart for the user who made the transaction
     await Cart.findOneAndUpdate({ user: transaction.user }, { $set: { items: [] } });
 
     return { status: 'success', message: 'Payment verified successfully', transaction };
