@@ -23,6 +23,7 @@ const PAYMENT_CONFIG = {
     enkash: {
         key: process.env.ENKASH_KEY,
         secret: process.env.ENKASH_SECRET,
+        mid: process.env.ENKASH_MID || 'CEKJK1EYSA', // From Dashboard: EnKash Company ID
         baseUrl: process.env.ENKASH_URL || 'https://olympus-pg.enkash.in/api/v0'
     }
 };
@@ -116,8 +117,8 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
     }
 
     if (data.paymentMethod === 'enkash') {
-        const { key, secret, baseUrl } = PAYMENT_CONFIG.enkash;
-        if (!key || !secret) throw new Error('EnKash Config Missing');
+        const { key, secret, mid, baseUrl } = PAYMENT_CONFIG.enkash;
+        if (!key || !secret || !mid) throw new Error('EnKash Config Missing');
 
         try {
             // 1. GET TOKEN
@@ -140,8 +141,8 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
                             'Authorization': authHeader,
                             'merchantAccessKey': key,
                             'API-Key': key,
-                            'mid': key,
-                            'merchantId': key
+                            'mid': mid,
+                            'merchantId': mid
                         },
                         body: JSON.stringify(payload)
                     });
@@ -160,9 +161,9 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
 
             // 2. CREATE ORDER
             const orderPayload = {
-                // IDs
-                mid: key,
-                merchantId: key,
+                // IDs (Using MID from Dashboard)
+                mid: mid,
+                merchantId: mid,
                 orderId: transactionId,
                 merchantOrderId: transactionId,
                 // Amount
@@ -188,7 +189,7 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
 
             // 3. INITIATE PAYMENT
             const pRes = await callEnKash('/payments', {
-                mid: key, merchantId: key,
+                mid: mid, merchantId: mid,
                 orderId: transactionId, merchantOrderId: transactionId,
                 paymentMode: "HOSTED"
             });
