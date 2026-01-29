@@ -34,14 +34,14 @@ const REDIRECT_URLS = {
 };
 
 const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
+    // 1. Validate Cart
     const cart = await Cart.findOne({ user: userId }).populate('items.course');
-    if (!cart || cart.items.length === 0) {
-        throw new Error('Cart is empty');
-    }
+    if (!cart || cart.items.length === 0) throw new Error('Cart is empty');
 
     const totalAmount = cart.items.reduce((sum, item) => sum + (item.course?.price || 0), 0);
     const transactionId = `TXN${Date.now()}`;
 
+    // 2. Save Transaction
     const transaction = new Transaction({
         user: userId,
         items: cart.items.map(i => ({ course: i.course._id, price: i.course.price })),
@@ -51,23 +51,20 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
         customerDetails: data.customerDetails,
         status: 'pending'
     });
-
     await transaction.save();
 
-    const productInfo = "EduHub Course Purchase";
     const firstName = data.customerDetails.firstName;
     const lastName = data.customerDetails.lastName || "User";
     const email = data.customerDetails.email;
     const phone = data.customerDetails.phone;
+    const productInfo = "EduHub Course Purchase";
 
-    // --- Gateway Specific Logic ---
+    // --- GATEWAY LOGIC ---
 
-    // 1. PayU
     if (data.paymentMethod === 'payu') {
         const { key, salt, formUrl } = PAYMENT_CONFIG.payu;
-        const hashString = `${key}|${transactionId}|${totalAmount.toFixed(2)}|${productInfo}|${firstName}|${email}|||||||||||salt`;
-        const hash = crypto.createHash('sha512').update(hashString.replace('salt', salt)).digest('hex');
-
+        const hashStr = `${key}|${transactionId}|${totalAmount.toFixed(2)}|${productInfo}|${firstName}|${email}|||||||||||${salt}`;
+        const hash = crypto.createHash('sha512').update(hashStr).digest('hex');
         return {
             status: 'success',
             data: {
@@ -75,195 +72,138 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
                 params: {
                     key, txnid: transactionId, amount: totalAmount.toFixed(2), productinfo: productInfo,
                     firstname: firstName, email: email, phone: phone, surl: REDIRECT_URLS.callback,
-                    furl: REDIRECT_URLS.callback, hash: hash, service_provider: 'payu_paisa'
+                    furl: REDIRECT_URLS.callback, hash, service_provider: 'payu_paisa'
                 }
             }
         };
     }
 
-    // 2. Easebuzz
     if (data.paymentMethod === 'easebuzz') {
         const { key, salt, initiateUrl, payUrl } = PAYMENT_CONFIG.easebuzz;
-        const hashString = `${key}|${transactionId}|${totalAmount.toFixed(2)}|${productInfo}|${firstName}|${email}|||||||||||${salt}`;
-        const hash = crypto.createHash('sha512').update(hashString).digest('hex');
-
+        const hashStr = `${key}|${transactionId}|${totalAmount.toFixed(2)}|${productInfo}|${firstName}|${email}|||||||||||${salt}`;
+        const hash = crypto.createHash('sha512').update(hashStr).digest('hex');
         const formData = new URLSearchParams();
-        formData.append('key', key);
-        formData.append('txnid', transactionId);
-        formData.append('amount', totalAmount.toFixed(2));
-        formData.append('productinfo', productInfo);
-        formData.append('firstname', firstName);
-        formData.append('email', email);
-        formData.append('phone', phone);
-        formData.append('surl', REDIRECT_URLS.callback);
-        formData.append('furl', REDIRECT_URLS.callback);
+        formData.append('key', key); formData.append('txnid', transactionId); formData.append('amount', totalAmount.toFixed(2));
+        formData.append('productinfo', productInfo); formData.append('firstname', firstName); formData.append('email', email);
+        formData.append('phone', phone); formData.append('surl', REDIRECT_URLS.callback); formData.append('furl', REDIRECT_URLS.callback);
         formData.append('hash', hash);
         for (let i = 1; i <= 10; i++) formData.append(`udf${i}`, '');
 
         try {
-            const response = await fetch(initiateUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
-                body: formData.toString()
-            });
-            const result = await response.json();
-            if (result.status === 1 && result.data) {
-                return { status: 'success', data: { paymentLink: `${payUrl}${result.data}` } };
-            } else {
-                throw new Error(result.error_desc || result.data || "Easebuzz API Error");
-            }
-        } catch (error) {
-            throw new Error(`Easebuzz Error: ${error.message}`);
-        }
+            const resp = await fetch(initiateUrl, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: formData.toString() });
+            const res = await resp.json();
+            if (res.status === 1) return { status: 'success', data: { paymentLink: `${payUrl}${res.data}` } };
+            throw new Error(res.error_desc || "Easebuzz Error");
+        } catch (e) { throw new Error(`Easebuzz Exception: ${e.message}`); }
     }
 
-    // 3. Cashfree
     if (data.paymentMethod === 'cashfree') {
         const { appId, secretKey, baseUrl } = PAYMENT_CONFIG.cashfree;
         try {
-            const response = await fetch(baseUrl, {
+            const resp = await fetch(baseUrl, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-client-id': appId, 'x-client-secret': secretKey, 'x-api-version': '2023-08-01'
-                },
+                headers: { 'Content-Type': 'application/json', 'x-client-id': appId, 'x-client-secret': secretKey, 'x-api-version': '2023-08-01' },
                 body: JSON.stringify({
-                    order_id: transactionId,
-                    order_amount: totalAmount,
-                    order_currency: 'INR',
-                    customer_details: {
-                        customer_id: userId.toString(),
-                        customer_email: email,
-                        customer_phone: phone,
-                        customer_name: `${firstName} ${lastName}`.trim()
-                    },
+                    order_id: transactionId, order_amount: totalAmount, order_currency: 'INR',
+                    customer_details: { customer_id: userId.toString(), customer_email: email, customer_phone: phone, customer_name: `${firstName} ${lastName}`.trim() },
                     order_meta: { return_url: `${REDIRECT_URLS.callback}?order_id={order_id}` }
                 })
             });
-            const result = await response.json();
-            if (result.payment_session_id) {
-                return { status: 'success', data: { paymentLink: result.payment_link || `https://payments.cashfree.com/checkouts/v1/mobile-checkout/${result.payment_session_id}` } };
-            } else {
-                throw new Error(result.message || "Cashfree API Error");
-            }
-        } catch (error) {
-            throw error;
-        }
+            const res = await resp.json();
+            if (res.payment_session_id) return { status: 'success', data: { paymentLink: res.payment_link || `https://payments.cashfree.com/checkouts/v1/mobile-checkout/${res.payment_session_id}` } };
+            throw new Error(res.message || "Cashfree Error");
+        } catch (e) { throw e; }
     }
 
-    // 4. EnKash (Refined for Olympus PG)
     if (data.paymentMethod === 'enkash') {
         const { key, secret, baseUrl } = PAYMENT_CONFIG.enkash;
-        if (!key || !secret) throw new Error('EnKash configuration missing');
+        if (!key || !secret) throw new Error('EnKash Config Missing');
 
         try {
-            // STEP 1: Auth Token
-            const tokenResponse = await fetch(`${baseUrl}/merchant/token`, {
+            // 1. GET TOKEN
+            const tResp = await fetch(`${baseUrl}/merchant/token`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'API-Key': key },
                 body: JSON.stringify({ accessKey: key, secretKey: secret })
             });
-            const tokenResult = await tokenResponse.json();
-            const token = tokenResult.token || tokenResult.accessToken;
-            if (!token) throw new Error(tokenResult.message || "EnKash Auth Failed");
+            const tRes = await tResp.json();
+            const token = tRes.token || tRes.accessToken;
+            if (!token) throw new Error(tRes.message || "EnKash Token Failed");
 
-            // --- UNIVERSAL ENKASH CALLER ---
-            const callEnKash = async (path, body, currentToken) => {
-                // We will try multiple headers/payloads to find what the server likes
-                const headers = {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${currentToken}`,
-                    'merchantAccessKey': key,
-                    'x-merchant-id': key,
-                    'mid': key,
-                    'API-Key': key
+            // --- REUSABLE ENKASH CALLER WITH FALLBACK ---
+            const callEnKash = async (endpoint, payload) => {
+                const makeRequest = async (authHeader) => {
+                    return await fetch(`${baseUrl}${endpoint}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': authHeader,
+                            'merchantAccessKey': key,
+                            'API-Key': key,
+                            'mid': key,
+                            'merchantId': key
+                        },
+                        body: JSON.stringify(payload)
+                    });
                 };
-                const resp = await fetch(`${baseUrl}${path}`, {
-                    method: 'POST', headers, body: JSON.stringify(body)
-                });
-                return await resp.json();
+
+                let resp = await makeRequest(`Bearer ${token}`);
+                let json = await resp.json();
+
+                // If Token Invalid, try without 'Bearer'
+                if (json.response_code === 117 || json.payload === "Token is invalid.") {
+                    resp = await makeRequest(token);
+                    json = await resp.json();
+                }
+                return json;
             };
 
-            // STEP 2: Create Order (The "Universal" Payload)
-            // We combine multiple key naming conventions into one object
+            // 2. CREATE ORDER
             const orderPayload = {
-                // Merchant IDs
+                // IDs
                 mid: key,
                 merchantId: key,
-                merchantAccessKey: key,
-
-                // Order Details
                 orderId: transactionId,
                 merchantOrderId: transactionId,
-
-                // Amount (Inclusive of all formats: object, and flat)
+                // Amount
                 amount: { value: totalAmount.toFixed(2), currency: "INR" },
                 orderAmount: totalAmount.toFixed(2),
                 currency: "INR",
-
                 // URLs
                 returnUrl: REDIRECT_URLS.frontendSuccess,
                 notifyUrl: REDIRECT_URLS.callback,
-
-                // Customer Info (Both nested and flat)
-                customerInfo: {
-                    firstName, lastName, email, phoneNumber: phone, customerIpAddress: ipAddress
-                },
+                // Customer
+                customerInfo: { firstName, lastName, email, phoneNumber: phone, customerIpAddress: ipAddress },
                 customerName: `${firstName} ${lastName}`.trim(),
                 customerEmail: email,
                 customerPhone: phone,
                 customerIpAddress: ipAddress,
-
                 description: productInfo
             };
 
-            let orderResult = await callEnKash('/orders', orderPayload, token);
-
-            // Handle common EnKash errors and retry logic
-            if (orderResult.response_code === 117 || orderResult.payload === "Token is invalid.") {
-                // Try without Bearer
-                const headersNoBearer = {
-                    'Content-Type': 'application/json',
-                    'Authorization': token,
-                    'merchantAccessKey': key,
-                    'mid': key
-                };
-                const respRetry = await fetch(`${baseUrl}/orders`, { method: 'POST', headers: headersNoBearer, body: JSON.stringify(orderPayload) });
-                orderResult = await respRetry.json();
+            const oRes = await callEnKash('/orders', orderPayload);
+            if (!oRes.orderId && !oRes.order_id && oRes.resultCode !== 1) {
+                throw new Error(`Order Failed: ${oRes.message || JSON.stringify(oRes)}`);
             }
 
-            if (!orderResult.orderId && !orderResult.order_id && orderResult.resultCode !== 1) {
-                const errorStr = orderResult.message || orderResult.resultMessage || JSON.stringify(orderResult);
-                throw new Error(`EnKash Order Error: ${errorStr}`);
-            }
-
-            // STEP 3: Initiate Payment (The "Universal" Payload)
-            const paymentPayload = {
-                mid: key,
-                merchantId: key,
-                orderId: transactionId,
-                merchantOrderId: transactionId,
+            // 3. INITIATE PAYMENT
+            const pRes = await callEnKash('/payments', {
+                mid: key, merchantId: key,
+                orderId: transactionId, merchantOrderId: transactionId,
                 paymentMode: "HOSTED"
-            };
+            });
 
-            let paymentResult = await callEnKash('/payments', paymentPayload, token);
+            const link = pRes.redirectionUrl || pRes.redirection_url || pRes.payload?.redirectionUrl;
+            if (link) return { status: 'success', data: { paymentLink: link } };
+            throw new Error(`Initiation Failed: ${pRes.message || JSON.stringify(pRes)}`);
 
-            // Redirection logic
-            const redirectUrl = paymentResult.redirectionUrl || paymentResult.redirection_url || paymentResult.payload?.redirectionUrl;
-
-            if (redirectUrl) {
-                return { status: 'success', data: { paymentLink: redirectUrl } };
-            } else {
-                throw new Error(`EnKash Payment Exception: ${paymentResult.message || JSON.stringify(paymentResult)}`);
-            }
-
-        } catch (error) {
-            console.error("[EnKash] Ultimate Flow Error:", error.message);
-            throw new Error(error.message);
+        } catch (e) {
+            console.error("[EnKash] Ultimate Error:", e.message);
+            throw new Error(e.message);
         }
     }
 
-    throw new Error('Unsupported payment method');
+    throw new Error('Unsupported Method');
 };
 
 const verifyPayment = async (userId, data) => {
