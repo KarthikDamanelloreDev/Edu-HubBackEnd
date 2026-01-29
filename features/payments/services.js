@@ -34,16 +34,13 @@ const REDIRECT_URLS = {
 };
 
 const initiatePayment = async (userId, data) => {
-    // 1. Get User Cart to verify amount and items
     const cart = await Cart.findOne({ user: userId }).populate('items.course');
     if (!cart || cart.items.length === 0) {
         throw new Error('Cart is empty');
     }
 
     const totalAmount = cart.items.reduce((sum, item) => sum + (item.course?.price || 0), 0);
-
-    // 2. Create Transaction Record
-    const transactionId = `TXN${Date.now()}${Math.floor(Math.random() * 10)}`; // Shortened slightly
+    const transactionId = `TXN${Date.now()}${Math.floor(Math.random() * 10)}`;
 
     const transaction = new Transaction({
         user: userId,
@@ -74,17 +71,9 @@ const initiatePayment = async (userId, data) => {
             data: {
                 formUrl,
                 params: {
-                    key,
-                    txnid: transactionId,
-                    amount: totalAmount.toFixed(2),
-                    productinfo: productInfo,
-                    firstname: firstName,
-                    email: email,
-                    phone: phone,
-                    surl: REDIRECT_URLS.callback,
-                    furl: REDIRECT_URLS.callback,
-                    hash: hash,
-                    service_provider: 'payu_paisa'
+                    key, txnid: transactionId, amount: totalAmount.toFixed(2), productinfo: productInfo,
+                    firstname: firstName, email: email, phone: phone, surl: REDIRECT_URLS.callback,
+                    furl: REDIRECT_URLS.callback, hash: hash, service_provider: 'payu_paisa'
                 }
             }
         };
@@ -132,9 +121,7 @@ const initiatePayment = async (userId, data) => {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'x-client-id': appId,
-                    'x-client-secret': secretKey,
-                    'x-api-version': '2023-08-01'
+                    'x-client-id': appId, 'x-client-secret': secretKey, 'x-api-version': '2023-08-01'
                 },
                 body: JSON.stringify({
                     order_id: transactionId,
@@ -166,13 +153,9 @@ const initiatePayment = async (userId, data) => {
 
         try {
             // STEP 1: Generate Authorization Token
-            // Using API-Key in header and clean body
             const tokenResponse = await fetch(`${baseUrl}/merchant/token`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'API-Key': key
-                },
+                headers: { 'Content-Type': 'application/json', 'API-Key': key },
                 body: JSON.stringify({ accessKey: key, secretKey: secret })
             });
 
@@ -182,14 +165,10 @@ const initiatePayment = async (userId, data) => {
             }
             const accessToken = tokenResult.token;
 
-            // STEP 2: Create Order
-            // Some versions of EnKash PG use merchantOrderId and separate amount/currency fields
+            // STEP 2: Create Order (Adding merchantAccessKey header)
             const orderPayload = {
                 orderId: transactionId,
-                amount: {
-                    value: totalAmount.toFixed(2),
-                    currency: "INR"
-                },
+                amount: { value: totalAmount.toFixed(2), currency: "INR" },
                 returnUrl: REDIRECT_URLS.frontendSuccess,
                 notifyUrl: REDIRECT_URLS.callback,
                 customerInfo: {
@@ -205,24 +184,25 @@ const initiatePayment = async (userId, data) => {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${accessToken}`
+                    'Authorization': `Bearer ${accessToken}`,
+                    'merchantAccessKey': key // Required by EnKash
                 },
                 body: JSON.stringify(orderPayload)
             });
 
             const orderResult = await orderResponse.json();
-            // Check for orderId or order_id or status: success
             if (!orderResult.orderId && !orderResult.order_id && orderResult.resultCode !== 1) {
                 const errorMsg = orderResult.message || orderResult.resultMessage || JSON.stringify(orderResult);
                 throw new Error(`EnKash Order Error: ${errorMsg}`);
             }
 
-            // STEP 3: Initiate Payment (HOSTED mode to get redirection URL)
+            // STEP 3: Initiate Payment (Adding merchantAccessKey header)
             const paymentResponse = await fetch(`${baseUrl}/payments`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${accessToken}`
+                    'Authorization': `Bearer ${accessToken}`,
+                    'merchantAccessKey': key // Required by EnKash
                 },
                 body: JSON.stringify({
                     orderId: transactionId,
@@ -234,9 +214,7 @@ const initiatePayment = async (userId, data) => {
             if (paymentResult.redirectionUrl || paymentResult.redirection_url) {
                 return {
                     status: 'success',
-                    data: {
-                        paymentLink: paymentResult.redirectionUrl || paymentResult.redirection_url
-                    }
+                    data: { paymentLink: paymentResult.redirectionUrl || paymentResult.redirection_url }
                 };
             } else {
                 const errorMsg = paymentResult.message || paymentResult.resultMessage || JSON.stringify(paymentResult);
