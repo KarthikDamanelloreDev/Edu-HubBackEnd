@@ -165,62 +165,44 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
                 throw new Error(tokenResult.message || tokenResult.resultMessage || "Failed to generate EnKash auth token");
             }
 
-            const commonHeaders = {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`, // Defaulting to Bearer for EnKash Corporate
-                'merchantAccessKey': key,
-                'mid': key, // Adding mid to headers
-                'API-Key': key,
-                'x-auth-token': token
+            // We will try all header combinations in Step 2 if it fails
+            const tryEnKashRequest = async (path, body, currentToken, useBearer = true) => {
+                const headers = {
+                    'Content-Type': 'application/json',
+                    'Authorization': useBearer ? `Bearer ${currentToken}` : currentToken,
+                    'merchantAccessKey': key,
+                    'mid': key,
+                    'API-Key': key,
+                    'x-auth-token': currentToken
+                };
+                const resp = await fetch(`${baseUrl}${path}`, {
+                    method: 'POST', headers, body: JSON.stringify(body)
+                });
+                return await resp.json();
+            };
+
+            const orderPayload = {
+                mid: key,
+                orderId: transactionId,
+                amount: { value: totalAmount.toFixed(2), currency: "INR" },
+                returnUrl: REDIRECT_URLS.frontendSuccess,
+                notifyUrl: REDIRECT_URLS.callback,
+                customerInfo: {
+                    firstName: firstName,
+                    lastName: data.customerDetails.lastName || "User",
+                    email: email,
+                    phoneNumber: phone,
+                    customerIpAddress: ipAddress
+                },
+                description: productInfo
             };
 
             // STEP 2: Create Order
-            const orderResponse = await fetch(`${baseUrl}/orders`, {
-                method: 'POST',
-                headers: commonHeaders,
-                body: JSON.stringify({
-                    mid: key, // Adding mid to body as well
-                    orderId: transactionId,
-                    amount: { value: totalAmount.toFixed(2), currency: "INR" },
-                    returnUrl: REDIRECT_URLS.frontendSuccess,
-                    notifyUrl: REDIRECT_URLS.callback,
-                    customerInfo: {
-                        firstName: firstName,
-                        lastName: data.customerDetails.lastName || "User",
-                        email: email,
-                        phoneNumber: phone,
-                        customerIpAddress: ipAddress
-                    },
-                    description: productInfo
-                })
-            });
+            let orderResult = await tryEnKashRequest('/orders', orderPayload, token, true); // Try with Bearer first
 
-            let orderResult = await orderResponse.json();
-
-            // Retry logic for Token 117 if needed, but error is 165 now.
-            if (!orderResult.orderId && !orderResult.order_id && orderResult.resultCode !== 1) {
-                // Try mapping key to merchantId if mid is rejected
-                console.log("[EnKash] Retrying with merchantId mapping...");
-                const secondOrderResponse = await fetch(`${baseUrl}/orders`, {
-                    method: 'POST',
-                    headers: commonHeaders,
-                    body: JSON.stringify({
-                        merchantId: key,
-                        orderId: transactionId,
-                        amount: { value: totalAmount.toFixed(2), currency: "INR" },
-                        returnUrl: REDIRECT_URLS.frontendSuccess,
-                        notifyUrl: REDIRECT_URLS.callback,
-                        customerInfo: {
-                            firstName: firstName,
-                            lastName: data.customerDetails.lastName || "User",
-                            email: email,
-                            phoneNumber: phone,
-                            customerIpAddress: ipAddress
-                        },
-                        description: productInfo
-                    })
-                });
-                orderResult = await secondOrderResponse.json();
+            if (orderResult.response_code === 117 || orderResult.payload === "Token is invalid.") {
+                console.log("[EnKash] Retrying Step 2 without Bearer prefix...");
+                orderResult = await tryEnKashRequest('/orders', orderPayload, token, false); // Retry without Bearer
             }
 
             if (!orderResult.orderId && !orderResult.order_id && orderResult.resultCode !== 1) {
@@ -228,17 +210,19 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
             }
 
             // STEP 3: Initiate Payment
-            const paymentResponse = await fetch(`${baseUrl}/payments`, {
-                method: 'POST',
-                headers: commonHeaders,
-                body: JSON.stringify({
-                    mid: key, // Adding mid to submission
-                    orderId: transactionId,
-                    paymentMode: "HOSTED"
-                })
-            });
+            const paymentPayload = {
+                mid: key,
+                orderId: transactionId,
+                paymentMode: "HOSTED"
+            };
 
-            const paymentResult = await paymentResponse.json();
+            let paymentResult = await tryEnKashRequest('/payments', paymentPayload, token, true);
+
+            if (paymentResult.response_code === 117 || paymentResult.payload === "Token is invalid.") {
+                console.log("[EnKash] Retrying Step 3 without Bearer prefix...");
+                paymentResult = await tryEnKashRequest('/payments', paymentPayload, token, false);
+            }
+
             if (paymentResult.redirectionUrl || paymentResult.redirection_url) {
                 return {
                     status: 'success',
