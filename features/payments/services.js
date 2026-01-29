@@ -33,7 +33,7 @@ const REDIRECT_URLS = {
     frontendFailure: process.env.FRONTEND_URL ? `${process.env.FRONTEND_URL}/payment-status?status=failure` : 'https://eduhub.org.in/payment-status?status=failure'
 };
 
-const initiatePayment = async (userId, data) => {
+const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
     const cart = await Cart.findOne({ user: userId }).populate('items.course');
     if (!cart || cart.items.length === 0) {
         throw new Error('Cart is empty');
@@ -184,7 +184,8 @@ const initiatePayment = async (userId, data) => {
                         firstName: firstName,
                         lastName: data.customerDetails.lastName || "User",
                         email: email,
-                        phoneNumber: phone
+                        phoneNumber: phone,
+                        customerIpAddress: ipAddress // Required field
                     },
                     description: productInfo
                 })
@@ -206,7 +207,8 @@ const initiatePayment = async (userId, data) => {
                             firstName: firstName,
                             lastName: data.customerDetails.lastName || "User",
                             email: email,
-                            phoneNumber: phone
+                            phoneNumber: phone,
+                            customerIpAddress: ipAddress
                         },
                         description: productInfo
                     })

@@ -10,7 +10,8 @@ router.post('/initiate', async (req, res) => {
             return res.status(BAD_REQUEST).json({ message: 'User ID required' });
         }
 
-        const result = await initiatePayment(userId, req.body);
+        const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+        const result = await initiatePayment(userId, req.body, ipAddress);
         res.status(OK).json(result);
     } catch (error) {
         console.error('Payment Initiation Error:', error);
