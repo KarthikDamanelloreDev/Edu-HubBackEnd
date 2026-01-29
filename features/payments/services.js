@@ -4,23 +4,23 @@ const crypto = require('crypto');
 
 const PAYMENT_CONFIG = {
     payu: {
-        key: process.env.PAYU_KEY || 'gvAZC3',
-        salt: process.env.PAYU_SALT || 'TXbjLE8te1zWPuow0agMv8M3OFgZFfTq',
+        key: process.env.PAYU_KEY,
+        salt: process.env.PAYU_SALT,
         formUrl: process.env.PAYU_URL || 'https://secure.payu.in/_payment'
     },
     cashfree: {
-        appId: process.env.CASHFREE_APP_ID || '1121173050d7761d04e10a62f653711211',
-        secretKey: process.env.CASHFREE_SECRET || 'cfsk_ma_prod_8f2785eb9db4e0bbae0ddedc3810c36f_83c95137',
+        appId: process.env.CASHFREE_APP_ID,
+        secretKey: process.env.CASHFREE_SECRET,
         baseUrl: process.env.CASHFREE_URL || 'https://api.cashfree.com/pg/orders'
     },
     easebuzz: {
-        key: process.env.EASEBUZZ_KEY || 'HQJFD3GMLT',
-        salt: process.env.EASEBUZZ_SALT || 'MVOLOP9U16',
+        key: process.env.EASEBUZZ_KEY,
+        salt: process.env.EASEBUZZ_SALT,
         formUrl: process.env.EASEBUZZ_URL || 'https://pay.easebuzz.in/payment/initiate'
     },
     enkash: {
-        key: process.env.ENKASH_KEY || 'BsUTQ147hyNNU3711',
-        secret: process.env.ENKASH_SECRET || '83688e5e7431020c2a5ed4c0114e8bf59b3b2045cc209fc918eadf83f46d3487caebd24f0233661e594ee345cf069543d4445e1f096087de20da6780f4b3a20e',
+        key: process.env.ENKASH_KEY,
+        secret: process.env.ENKASH_SECRET,
         baseUrl: process.env.ENKASH_URL || 'https://api.enkash.com/v1/payment/initiate'
     }
 };
@@ -63,6 +63,7 @@ const initiatePayment = async (userId, data) => {
     // 3. Gateway Specific Logic
     if (data.paymentMethod === 'payu') {
         const { key, salt, formUrl } = PAYMENT_CONFIG.payu;
+        if (!key || !salt) throw new Error('PayU configuration missing');
         // Hash Sequence: key|txnid|amount|productinfo|firstname|email|udf1|udf2|udf3|udf4|udf5||||||salt
         const hashString = `${key}|${transactionId}|${totalAmount.toFixed(2)}|${productInfo}|${firstName}|${email}|||||||||||${salt}`;
         const hash = crypto.createHash('sha512').update(hashString).digest('hex');
@@ -90,6 +91,7 @@ const initiatePayment = async (userId, data) => {
 
     if (data.paymentMethod === 'easebuzz') {
         const { key, salt, formUrl } = PAYMENT_CONFIG.easebuzz;
+        if (!key || !salt) throw new Error('EaseBuzz configuration missing');
         const hashString = `${key}|${transactionId}|${totalAmount.toFixed(2)}|${productInfo}|${firstName}|${email}|||||||||||${salt}`;
         const hash = crypto.createHash('sha512').update(hashString).digest('hex');
 
@@ -115,6 +117,7 @@ const initiatePayment = async (userId, data) => {
 
     if (data.paymentMethod === 'cashfree') {
         const { appId, secretKey, baseUrl } = PAYMENT_CONFIG.cashfree;
+        if (!appId || !secretKey) throw new Error('Cashfree configuration missing');
 
         try {
             const response = await fetch(baseUrl, {
@@ -162,6 +165,7 @@ const initiatePayment = async (userId, data) => {
 
     if (data.paymentMethod === 'enkash') {
         const { key, secret } = PAYMENT_CONFIG.enkash;
+        if (!key) throw new Error('EnKash configuration missing');
         return {
             status: 'success',
             data: {
