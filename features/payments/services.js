@@ -62,8 +62,8 @@ const initiatePayment = async (userId, data) => {
     // Gateway Specific Logic
     if (data.paymentMethod === 'payu') {
         const { key, salt, formUrl } = PAYMENT_CONFIG.payu;
-        const hashString = `${key}|${transactionId}|${totalAmount.toFixed(2)}|${productInfo}|${firstName}|${email}|||||||||||${salt}`;
-        const hash = crypto.createHash('sha512').update(hashString).digest('hex');
+        const hashString = `${key}|${transactionId}|${totalAmount.toFixed(2)}|${productInfo}|${firstName}|${email}|||||||||||salt`;
+        const hash = crypto.createHash('sha512').update(hashString.replace('salt', salt)).digest('hex');
 
         return {
             status: 'success',
@@ -151,13 +151,9 @@ const initiatePayment = async (userId, data) => {
         if (!key || !secret) throw new Error('EnKash configuration missing');
 
         try {
-            // STEP 1: Generate Authorization Token
             const tokenResponse = await fetch(`${baseUrl}/merchant/token`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'API-Key': key
-                },
+                headers: { 'Content-Type': 'application/json', 'API-Key': key },
                 body: JSON.stringify({ accessKey: key, secretKey: secret })
             });
 
@@ -168,18 +164,14 @@ const initiatePayment = async (userId, data) => {
                 throw new Error(tokenResult.message || tokenResult.resultMessage || "Failed to generate EnKash auth token");
             }
 
-            // EnKash headers can be tricky. We will provide all common variants.
-            // Using token directly without "Bearer " first as per some Indian PG specs.
-            // We'll also keep the x-auth-token as a fallback header.
             const commonHeaders = {
                 'Content-Type': 'application/json',
-                'Authorization': token, // No "Bearer " prefix
+                'Authorization': token,
                 'merchantAccessKey': key,
                 'API-Key': key,
                 'x-auth-token': token
             };
 
-            // STEP 2: Create Order
             const orderResponse = await fetch(`${baseUrl}/orders`, {
                 method: 'POST',
                 headers: commonHeaders,
@@ -200,9 +192,7 @@ const initiatePayment = async (userId, data) => {
 
             const orderResult = await orderResponse.json();
 
-            // If Step 2 fails with "Token is invalid" again, we try WITH "Bearer " prefix as a fallback logic
             if (orderResult.response_code === 117 || orderResult.payload === "Token is invalid.") {
-                console.log("[EnKash] Retrying Step 2 with Bearer prefix...");
                 commonHeaders['Authorization'] = `Bearer ${token}`;
                 const retryResponse = await fetch(`${baseUrl}/orders`, {
                     method: 'POST',
@@ -222,7 +212,6 @@ const initiatePayment = async (userId, data) => {
                     })
                 });
                 const retryResult = await retryResponse.json();
-
                 if (!retryResult.orderId && !retryResult.order_id && retryResult.resultCode !== 1) {
                     throw new Error(`EnKash Order Error: ${retryResult.message || retryResult.resultMessage || JSON.stringify(retryResult)}`);
                 }
@@ -230,7 +219,6 @@ const initiatePayment = async (userId, data) => {
                 throw new Error(`EnKash Order Error: ${orderResult.message || orderResult.resultMessage || JSON.stringify(orderResult)}`);
             }
 
-            // STEP 3: Initiate Payment
             const paymentResponse = await fetch(`${baseUrl}/payments`, {
                 method: 'POST',
                 headers: commonHeaders,
@@ -259,5 +247,22 @@ const initiatePayment = async (userId, data) => {
     throw new Error('Unsupported payment method');
 };
 
-const verifyPayment = async (userId, data) => { ... }; // Unchanged
-const module.exports = { initiatePayment, verifyPayment, REDIRECT_URLS };
+const verifyPayment = async (userId, data) => {
+    const transactionId = data.txnid || data.order_id || data.transactionId;
+    const transaction = await Transaction.findOne({ transactionId });
+    if (!transaction) throw new Error('Transaction not found');
+    if (transaction.status === 'success') return { status: 'success', message: 'Payment already verified' };
+
+    transaction.status = 'success';
+    transaction.gatewayResponse = data;
+    await transaction.save();
+
+    await Cart.findOneAndUpdate({ user: transaction.user }, { $set: { items: [] } });
+    return { status: 'success', message: 'Payment verified successfully', transaction };
+};
+
+module.exports = {
+    initiatePayment,
+    verifyPayment,
+    REDIRECT_URLS
+};
