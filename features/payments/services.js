@@ -16,7 +16,7 @@ const PAYMENT_CONFIG = {
     easebuzz: {
         key: process.env.EASEBUZZ_KEY,
         salt: process.env.EASEBUZZ_SALT,
-        formUrl: process.env.EASEBUZZ_URL || 'https://pay.easebuzz.in/payment/initiate'
+        initiateUrl: 'https://pay.easebuzz.in/payment/initiate'
     },
     enkash: {
         key: process.env.ENKASH_KEY,
@@ -90,29 +90,54 @@ const initiatePayment = async (userId, data) => {
     }
 
     if (data.paymentMethod === 'easebuzz') {
-        const { key, salt, formUrl } = PAYMENT_CONFIG.easebuzz;
+        const { key, salt, initiateUrl } = PAYMENT_CONFIG.easebuzz;
         if (!key || !salt) throw new Error('EaseBuzz configuration missing');
+
+        // Hash for Easebuzz (Must contain 10 UDFs)
         const hashString = `${key}|${transactionId}|${totalAmount.toFixed(2)}|${productInfo}|${firstName}|${email}|||||||||||${salt}`;
         const hash = crypto.createHash('sha512').update(hashString).digest('hex');
 
-        return {
-            status: 'success',
-            data: {
-                formUrl,
-                params: {
-                    key,
-                    txnid: transactionId,
-                    amount: totalAmount.toFixed(2),
-                    productinfo: productInfo,
-                    firstname: firstName,
-                    email: email,
-                    phone: phone,
-                    surl: REDIRECT_URLS.callback,
-                    furl: REDIRECT_URLS.callback,
-                    hash: hash
-                }
+        const formData = new URLSearchParams();
+        formData.append('key', key);
+        formData.append('txnid', transactionId);
+        formData.append('amount', totalAmount.toFixed(2));
+        formData.append('productinfo', productInfo);
+        formData.append('firstname', firstName);
+        formData.append('email', email);
+        formData.append('phone', phone);
+        formData.append('surl', REDIRECT_URLS.callback);
+        formData.append('furl', REDIRECT_URLS.callback);
+        formData.append('hash', hash);
+
+        try {
+            console.log("Initiating server-to-server call to Easebuzz...");
+            const response = await fetch(initiateUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Accept': 'application/json'
+                },
+                body: formData.toString()
+            });
+
+            const result = await response.json();
+
+            if (result.status === 1 && result.data) {
+                // Success - returns access_key
+                return {
+                    status: 'success',
+                    data: {
+                        paymentLink: `https://pay.easebuzz.in/pay/${result.data}`
+                    }
+                };
+            } else {
+                console.error("Easebuzz API Error Response:", result);
+                throw new Error(result.error_desc || result.message || "Could not initiate Easebuzz payment. Please check your credentials.");
             }
-        };
+        } catch (error) {
+            console.error("Easebuzz Initiation Exception:", error);
+            throw new Error(`Easebuzz Error: ${error.message}`);
+        }
     }
 
     if (data.paymentMethod === 'cashfree') {
@@ -166,6 +191,8 @@ const initiatePayment = async (userId, data) => {
     if (data.paymentMethod === 'enkash') {
         const { key, secret } = PAYMENT_CONFIG.enkash;
         if (!key) throw new Error('EnKash configuration missing');
+
+        // EnKash fallback simple redirect (if they support it)
         return {
             status: 'success',
             data: {
@@ -188,7 +215,7 @@ const verifyPayment = async (userId, data) => {
         return { status: 'success', message: 'Payment already verified' };
     }
 
-    // In production, verify hash/checksum here
+    // In production, you would ideally verify the status with the gateway API here
 
     transaction.status = 'success';
     transaction.gatewayResponse = data;
