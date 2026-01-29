@@ -16,14 +16,14 @@ const PAYMENT_CONFIG = {
     easebuzz: {
         key: process.env.EASEBUZZ_KEY,
         salt: process.env.EASEBUZZ_SALT,
-        env: process.env.EASEBUZZ_ENV || 'prod', // Default to prod
+        env: process.env.EASEBUZZ_ENV || 'prod',
         initiateUrl: (process.env.EASEBUZZ_ENV === 'prod') ? 'https://pay.easebuzz.in/payment/initiateLink' : 'https://testpay.easebuzz.in/payment/initiateLink',
         payUrl: (process.env.EASEBUZZ_ENV === 'prod') ? 'https://pay.easebuzz.in/pay/' : 'https://testpay.easebuzz.in/pay/'
     },
     enkash: {
         key: process.env.ENKASH_KEY,
         secret: process.env.ENKASH_SECRET,
-        baseUrl: process.env.ENKASH_URL || 'https://api.enkash.com/v1/payment/initiate'
+        baseUrl: process.env.ENKASH_URL || 'https://olympus-pg.enkash.in/api/v0'
     }
 };
 
@@ -92,10 +92,6 @@ const initiatePayment = async (userId, data) => {
 
     if (data.paymentMethod === 'easebuzz') {
         const { key, salt, initiateUrl, payUrl } = PAYMENT_CONFIG.easebuzz;
-        if (!key || !salt) throw new Error('EaseBuzz configuration missing');
-
-        // Exact Hash Sequence from Easebuzz Node.js Library:
-        // key|txnid|amount|productinfo|firstname|email|udf1|udf2|udf3|udf4|udf5|udf6|udf7|udf8|udf9|udf10|salt
         const hashString = `${key}|${transactionId}|${totalAmount.toFixed(2)}|${productInfo}|${firstName}|${email}|||||||||||${salt}`;
         const hash = crypto.createHash('sha512').update(hashString).digest('hex');
 
@@ -110,46 +106,27 @@ const initiatePayment = async (userId, data) => {
         formData.append('surl', REDIRECT_URLS.callback);
         formData.append('furl', REDIRECT_URLS.callback);
         formData.append('hash', hash);
-        // Add empty UDFs to be explicit if needed by some older versions of the API
         for (let i = 1; i <= 10; i++) formData.append(`udf${i}`, '');
 
         try {
-            console.log(`[Easebuzz] Initiating to: ${initiateUrl}`);
             const response = await fetch(initiateUrl, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'Accept': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
                 body: formData.toString()
             });
-
             const result = await response.json();
-
             if (result.status === 1 && result.data) {
-                // Easebuzz returns an access_key in result.data
-                const accessKey = result.data;
-                console.log(`[Easebuzz] Successfully obtained access_key: ${accessKey}`);
-                return {
-                    status: 'success',
-                    data: {
-                        paymentLink: `${payUrl}${accessKey}`
-                    }
-                };
+                return { status: 'success', data: { paymentLink: `${payUrl}${result.data}` } };
             } else {
-                console.error("[Easebuzz] API Error Result:", result);
-                throw new Error(result.error_desc || result.data || result.message || "Failed to obtain payment access key from Easebuzz.");
+                throw new Error(result.error_desc || result.data || "Easebuzz API Error");
             }
         } catch (error) {
-            console.error("[Easebuzz] Request Exception:", error);
             throw new Error(`Easebuzz Error: ${error.message}`);
         }
     }
 
     if (data.paymentMethod === 'cashfree') {
         const { appId, secretKey, baseUrl } = PAYMENT_CONFIG.cashfree;
-        if (!appId || !secretKey) throw new Error('Cashfree configuration missing');
-
         try {
             const response = await fetch(baseUrl, {
                 method: 'POST',
@@ -169,40 +146,98 @@ const initiatePayment = async (userId, data) => {
                         customer_phone: phone,
                         customer_name: `${firstName} ${data.customerDetails.lastName || ''}`.trim()
                     },
-                    order_meta: {
-                        return_url: `${REDIRECT_URLS.callback}?order_id={order_id}`
-                    }
+                    order_meta: { return_url: `${REDIRECT_URLS.callback}?order_id={order_id}` }
                 })
             });
-
             const result = await response.json();
-
             if (result.payment_session_id) {
-                return {
-                    status: 'success',
-                    data: {
-                        paymentLink: result.payment_link || `https://payments.cashfree.com/checkouts/v1/mobile-checkout/${result.payment_session_id}`
-                    }
-                };
+                return { status: 'success', data: { paymentLink: result.payment_link || `https://payments.cashfree.com/checkouts/v1/mobile-checkout/${result.payment_session_id}` } };
             } else {
-                console.error("Cashfree Error:", result);
-                throw new Error(result.message || "Failed to initiate Cashfree payment");
+                throw new Error(result.message || "Cashfree API Error");
             }
         } catch (error) {
-            console.error("Cashfree API Error:", error);
             throw error;
         }
     }
 
     if (data.paymentMethod === 'enkash') {
-        const { key } = PAYMENT_CONFIG.enkash;
-        if (!key) throw new Error('EnKash configuration missing');
-        return {
-            status: 'success',
-            data: {
-                paymentLink: `https://checkout.enkash.com/pay?key=${key}&order_id=${transactionId}&amount=${totalAmount}&email=${email}`
+        const { key, secret, baseUrl } = PAYMENT_CONFIG.enkash;
+        if (!key || !secret) throw new Error('EnKash configuration missing');
+
+        try {
+            console.log("[EnKash] Step 1: Generating Auth Token...");
+            const tokenResponse = await fetch(`${baseUrl}/merchant/token`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'API-Key': key },
+                body: JSON.stringify({ accessKey: key, secretKey: secret })
+            });
+
+            const tokenResult = await tokenResponse.json();
+            if (!tokenResult.token) {
+                console.error("[EnKash] Token Error:", tokenResult);
+                throw new Error("Failed to generate EnKash auth token");
             }
-        };
+            const accessToken = tokenResult.token;
+
+            console.log("[EnKash] Step 2: Creating Order...");
+            const orderResponse = await fetch(`${baseUrl}/orders`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${accessToken}`
+                },
+                body: JSON.stringify({
+                    orderId: transactionId,
+                    amount: { value: totalAmount.toFixed(2), currency: "INR" },
+                    returnUrl: REDIRECT_URLS.frontendSuccess, // EnKash redirects here after checkout
+                    notifyUrl: REDIRECT_URLS.callback,
+                    customerInfo: {
+                        firstName: firstName,
+                        lastName: data.customerDetails.lastName || "",
+                        email: email,
+                        phoneNumber: phone
+                    },
+                    description: productInfo
+                })
+            });
+
+            const orderResult = await orderResponse.json();
+            if (!orderResult.orderId) {
+                console.error("[EnKash] Order Error:", orderResult);
+                throw new Error("Failed to create EnKash order");
+            }
+
+            console.log("[EnKash] Step 3: Initiating Payment (HOSTED mode)...");
+            const paymentResponse = await fetch(`${baseUrl}/payments`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${accessToken}`
+                },
+                body: JSON.stringify({
+                    orderId: transactionId,
+                    paymentMode: "HOSTED"
+                })
+            });
+
+            const paymentResult = await paymentResponse.json();
+            if (paymentResult.redirectionUrl) {
+                console.log("[EnKash] Success! Redirecting to:", paymentResult.redirectionUrl);
+                return {
+                    status: 'success',
+                    data: {
+                        paymentLink: paymentResult.redirectionUrl
+                    }
+                };
+            } else {
+                console.error("[EnKash] Payment Initiation Error:", paymentResult);
+                throw new Error(paymentResult.message || "Failed to initiate EnKash hosted payment");
+            }
+
+        } catch (error) {
+            console.error("[EnKash] Flow Exception:", error);
+            throw new Error(`EnKash Error: ${error.message}`);
+        }
     }
 
     throw new Error('Unsupported payment method');
@@ -211,25 +246,15 @@ const initiatePayment = async (userId, data) => {
 const verifyPayment = async (userId, data) => {
     const transactionId = data.txnid || data.order_id || data.transactionId;
     const transaction = await Transaction.findOne({ transactionId });
-    if (!transaction) {
-        throw new Error('Transaction not found');
-    }
-
-    if (transaction.status === 'success') {
-        return { status: 'success', message: 'Payment already verified' };
-    }
+    if (!transaction) throw new Error('Transaction not found');
+    if (transaction.status === 'success') return { status: 'success', message: 'Payment already verified' };
 
     transaction.status = 'success';
     transaction.gatewayResponse = data;
     await transaction.save();
 
     await Cart.findOneAndUpdate({ user: transaction.user }, { $set: { items: [] } });
-
     return { status: 'success', message: 'Payment verified successfully', transaction };
 };
 
-module.exports = {
-    initiatePayment,
-    verifyPayment,
-    REDIRECT_URLS
-};
+module.exports = { initiatePayment, verifyPayment, REDIRECT_URLS };
