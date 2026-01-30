@@ -118,7 +118,9 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
 
     if (data.paymentMethod === 'enkash') {
         const { key, secret, mid, baseUrl } = PAYMENT_CONFIG.enkash;
-        if (!key || !secret || !mid) throw new Error('EnKash Config Missing');
+        if (!key || !secret) throw new Error('EnKash Config Missing');
+
+        console.log(`[EnKash] Starting payment for ${transactionId}, Amount: ${totalAmount}`);
 
         try {
             // 1. GET TOKEN
@@ -128,79 +130,81 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
                 body: JSON.stringify({ accessKey: key, secretKey: secret })
             });
             const tRes = await tResp.json();
-            const token = tRes.token || tRes.accessToken;
-            if (!token) throw new Error(tRes.message || "EnKash Token Failed");
+            const token = tRes.token;
+            if (!token) throw new Error(`Token Failed: ${tRes.resultMessage || tRes.message || "No token returned"}`);
 
-            // --- REUSABLE ENKASH CALLER WITH FALLBACK ---
+            // --- API CALLER ---
             const callEnKash = async (endpoint, payload) => {
-                const makeRequest = async (authHeader) => {
-                    return await fetch(`${baseUrl}${endpoint}`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': authHeader,
-                            'merchantAccessKey': key,
-                            'API-Key': key,
-                            'mid': mid,
-                            'merchantId': mid
-                        },
-                        body: JSON.stringify(payload)
-                    });
+                const headers = {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                    'merchantAccessKey': key
                 };
+                if (mid) headers['mid'] = mid;
 
-                let resp = await makeRequest(`Bearer ${token}`);
-                let json = await resp.json();
-
-                // If Token Invalid, try without 'Bearer'
-                if (json.response_code === 117 || json.payload === "Token is invalid.") {
-                    resp = await makeRequest(token);
-                    json = await resp.json();
-                }
-                return json;
+                const resp = await fetch(`${baseUrl}${endpoint}`, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify(payload)
+                });
+                return await resp.json();
             };
 
             // 2. CREATE ORDER
             const orderPayload = {
-                // IDs (Using MID from Dashboard)
-                mid: mid,
-                merchantId: mid,
                 orderId: transactionId,
-                merchantOrderId: transactionId,
-                // Amount
-                amount: { value: totalAmount.toFixed(2), currency: "INR" },
-                orderAmount: totalAmount.toFixed(2),
-                currency: "INR",
-                // URLs
+                amount: {
+                    value: Number(totalAmount.toFixed(2)),
+                    currency: "INR"
+                },
                 returnUrl: REDIRECT_URLS.frontendSuccess,
                 notifyUrl: REDIRECT_URLS.callback,
-                // Customer
-                customerInfo: { firstName, lastName, email, phoneNumber: phone, customerIpAddress: ipAddress },
-                customerName: `${firstName} ${lastName}`.trim(),
-                customerEmail: email,
-                customerPhone: phone,
-                customerIpAddress: ipAddress,
+                customerInfo: {
+                    firstName,
+                    lastName,
+                    email,
+                    phoneNumber: phone,
+                    customerIpAddress: ipAddress
+                },
                 description: productInfo
             };
 
             const oRes = await callEnKash('/orders', orderPayload);
-            if (!oRes.orderId && !oRes.order_id && oRes.resultCode !== 1) {
-                throw new Error(`Order Failed: ${oRes.message || JSON.stringify(oRes)}`);
+            console.log("[EnKash] Order Response:", JSON.stringify(oRes));
+
+            // Check if order creation failed
+            if (oRes.resultCode !== 0 && oRes.response_code !== 200) {
+                // Some EnKash versions might use different success codes
+                if (!oRes.payload?.orderId && !oRes.orderId) {
+                    throw new Error(`Order Failed: ${oRes.resultMessage || oRes.response_message || "Unknown error"}`);
+                }
             }
 
-            // 3. INITIATE PAYMENT
-            const pRes = await callEnKash('/payments', {
-                mid: mid, merchantId: mid,
-                orderId: transactionId, merchantOrderId: transactionId,
-                paymentMode: "HOSTED"
-            });
+            // If Create Order already gave us a redirection URL, use it
+            let finalLink = oRes.payload?.redirectionUrl || oRes.redirectionUrl;
 
-            const link = pRes.redirectionUrl || pRes.redirection_url || pRes.payload?.redirectionUrl;
-            if (link) return { status: 'success', data: { paymentLink: link } };
-            throw new Error(`Initiation Failed: ${pRes.message || JSON.stringify(pRes)}`);
+            if (!finalLink) {
+                // 3. SUBMIT PAYMENT (If no URL from order)
+                console.log("[EnKash] No redirection URL in order, submitting payment...");
+                const pRes = await callEnKash('/payment/submit', {
+                    orderId: transactionId,
+                    paymentDetail: {
+                        paymentMode: "HOSTED"
+                    }
+                });
+                console.log("[EnKash] Payment Submit Response:", JSON.stringify(pRes));
+                finalLink = pRes.payload?.redirectionUrl || pRes.redirectionUrl;
+            }
+
+            if (finalLink) {
+                return { status: 'success', data: { paymentLink: finalLink } };
+            }
+
+            throw new Error(`Failed to get redirection URL from EnKash`);
 
         } catch (e) {
-            console.error("[EnKash] Ultimate Error:", e.message);
-            throw new Error(e.message);
+            console.error("[EnKash] Error:", e.message);
+            throw e;
         }
     }
 
@@ -208,17 +212,47 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
 };
 
 const verifyPayment = async (userId, data) => {
-    const transactionId = data.txnid || data.order_id || data.transactionId;
+    console.log("[Payment Verify] Data received:", JSON.stringify(data));
+
+    const transactionId = data.txnid || data.order_id || data.transactionId || data.orderId;
     const transaction = await Transaction.findOne({ transactionId });
-    if (!transaction) throw new Error('Transaction not found');
-    if (transaction.status === 'success') return { status: 'success', message: 'Payment already verified' };
 
-    transaction.status = 'success';
-    transaction.gatewayResponse = data;
-    await transaction.save();
+    if (!transaction) {
+        console.error(`[Payment Verify] Transaction not found for ID: ${transactionId}`);
+        throw new Error('Transaction not found');
+    }
 
-    await Cart.findOneAndUpdate({ user: transaction.user }, { $set: { items: [] } });
-    return { status: 'success', message: 'Payment verified successfully', transaction };
+    if (transaction.status === 'success') {
+        return { status: 'success', message: 'Payment already verified' };
+    }
+
+    // Determine success based on gateway
+    let isSuccessful = false;
+
+    if (transaction.paymentGateway === 'enkash') {
+        const enkashStatus = data.status || data.transactionStatus || data.orderStatus;
+        isSuccessful = (enkashStatus === 'SUCCESS' || enkashStatus === 'PAID');
+    } else {
+        // Generic success check for other gateways
+        isSuccessful = data.status === 'success' || data.txStatus === 'SUCCESS' || data.order_status === 'PAID' || data.result === 'success';
+    }
+
+    if (isSuccessful) {
+        transaction.status = 'success';
+        transaction.gatewayResponse = data;
+        await transaction.save();
+
+        // Clear cart
+        await Cart.findOneAndUpdate({ user: transaction.user }, { $set: { items: [] } });
+        console.log(`[Payment Verify] Transaction ${transactionId} successful`);
+        return { status: 'success', message: 'Payment verified successfully', transaction };
+    } else {
+        transaction.status = 'failed';
+        transaction.gatewayResponse = data;
+        await transaction.save();
+        console.warn(`[Payment Verify] Transaction ${transactionId} failed: ${data.txnMsg || data.message || "Unknown error"}`);
+        throw new Error(data.txnMsg || data.message || 'Payment verification failed');
+    }
 };
 
 module.exports = { initiatePayment, verifyPayment, REDIRECT_URLS };

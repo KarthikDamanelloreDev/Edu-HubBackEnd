@@ -29,7 +29,7 @@ router.all('/callback', async (req, res) => {
         const data = { ...req.body, ...req.query };
 
         // Basic check for success from common gateways
-        const isSuccess = data.status === 'success' || data.txStatus === 'SUCCESS' || data.order_status === 'PAID' || data.result === 'success';
+        const isSuccess = data.status === 'success' || data.status === 'SUCCESS' || data.txStatus === 'SUCCESS' || data.order_status === 'PAID' || data.result === 'success';
 
         if (isSuccess) {
             const result = await verifyPayment(null, data);
