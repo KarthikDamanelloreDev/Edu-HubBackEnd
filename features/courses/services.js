@@ -1,4 +1,5 @@
 const Course = require('./schema');
+const Instructor = require('../instructors/schema');
 
 // Create a new course
 const createCourse = async (courseData) => {
@@ -44,9 +45,23 @@ const getAllCourses = async (query) => {
 
     // Search
     if (search) {
+        const trimmedSearch = search.trim();
+        // Escape special regex characters
+        const escapedSearch = trimmedSearch.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        const searchRegex = { $regex: escapedSearch, $options: 'i' };
+
+        // Also search in instructors name
+        const matchingInstructors = await Instructor.find({
+            name: searchRegex
+        }).select('id');
+        const instructorIds = matchingInstructors.map(inst => inst.id);
+
         filter.$or = [
-            { title: { $regex: search, $options: 'i' } },
-            { description: { $regex: search, $options: 'i' } }
+            { title: searchRegex },
+            { description: searchRegex },
+            { category: searchRegex },
+            { subcategory: searchRegex },
+            { instructorId: { $in: instructorIds } }
         ];
     }
 
@@ -55,7 +70,9 @@ const getAllCourses = async (query) => {
         filter.category = category;
     }
     if (level && level !== 'all') {
-        filter.level = level;
+        // If a specific level is requested, also include "All Levels" 
+        // as they are suitable for everyone including beginners/intermediates/advanced
+        filter.level = { $in: [level, 'All Levels'] };
     }
 
     // Sorthing
@@ -68,7 +85,7 @@ const getAllCourses = async (query) => {
             sortOption = { rating: -1 };
             break;
         case 'newest':
-            sortOption = { lastUpdated: -1 }; // or createdAt
+            sortOption = { createdAt: -1 };
             break;
         case 'price-low':
             sortOption = { price: 1 };
