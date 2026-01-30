@@ -130,24 +130,48 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
                 body: JSON.stringify({ accessKey: key, secretKey: secret })
             });
             const tRes = await tResp.json();
-            const token = tRes.token;
-            if (!token) throw new Error(`Token Failed: ${tRes.resultMessage || tRes.message || "No token returned"}`);
+            console.log("[EnKash] Token Response:", JSON.stringify(tRes));
 
-            // --- API CALLER ---
+            // Extracts token from various possible structures
+            const token = tRes.token || (tRes.payload && tRes.payload.token) || tRes.accessToken;
+
+            if (!token) {
+                throw new Error(`Token Failed: ${tRes.resultMessage || tRes.response_message || tRes.message || "No token returned"}`);
+            }
+
+            // --- API CALLER WITH FALLBACK ---
             const callEnKash = async (endpoint, payload) => {
-                const headers = {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`,
-                    'merchantAccessKey': key
-                };
-                if (mid) headers['mid'] = mid;
+                const makeRequest = async (authValue) => {
+                    const headers = {
+                        'Content-Type': 'application/json',
+                        'Authorization': authValue,
+                        'merchantAccessKey': key,
+                        'API-Key': key // Some versions want this
+                    };
+                    if (mid) {
+                        headers['mid'] = mid;
+                        headers['merchantId'] = mid; // Duplicate to be safe
+                    }
 
-                const resp = await fetch(`${baseUrl}${endpoint}`, {
-                    method: 'POST',
-                    headers,
-                    body: JSON.stringify(payload)
-                });
-                return await resp.json();
+                    const resp = await fetch(`${baseUrl}${endpoint}`, {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify(payload)
+                    });
+                    return await resp.json();
+                };
+
+                let result = await makeRequest(`Bearer ${token}`);
+                console.log(`[EnKash] Call ${endpoint} (with Bearer):`, JSON.stringify(result));
+
+                // Fallback if Bearer is rejected
+                if (result.response_code === 117 || result.payload === "Token is invalid.") {
+                    console.warn(`[EnKash] Bearer token rejected for ${endpoint}, trying raw token...`);
+                    result = await makeRequest(token);
+                    console.log(`[EnKash] Call ${endpoint} (raw token):`, JSON.stringify(result));
+                }
+
+                return result;
             };
 
             // 2. CREATE ORDER
@@ -170,18 +194,16 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
             };
 
             const oRes = await callEnKash('/orders', orderPayload);
-            console.log("[EnKash] Order Response:", JSON.stringify(oRes));
 
             // Check if order creation failed
             if (oRes.resultCode !== 0 && oRes.response_code !== 200) {
-                // Some EnKash versions might use different success codes
                 if (!oRes.payload?.orderId && !oRes.orderId) {
-                    throw new Error(`Order Failed: ${oRes.resultMessage || oRes.response_message || "Unknown error"}`);
+                    throw new Error(`Order Failed: ${oRes.resultMessage || oRes.response_message || oRes.payload || "Unknown error"}`);
                 }
             }
 
             // If Create Order already gave us a redirection URL, use it
-            let finalLink = oRes.payload?.redirectionUrl || oRes.redirectionUrl;
+            let finalLink = oRes.payload?.redirectionUrl || oRes.redirectionUrl || oRes.payload?.redirection_url;
 
             if (!finalLink) {
                 // 3. SUBMIT PAYMENT (If no URL from order)
@@ -192,8 +214,7 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
                         paymentMode: "HOSTED"
                     }
                 });
-                console.log("[EnKash] Payment Submit Response:", JSON.stringify(pRes));
-                finalLink = pRes.payload?.redirectionUrl || pRes.redirectionUrl;
+                finalLink = pRes.payload?.redirectionUrl || pRes.redirectionUrl || pRes.payload?.redirection_url;
             }
 
             if (finalLink) {
