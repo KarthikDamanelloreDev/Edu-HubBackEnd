@@ -25,7 +25,7 @@ const transactionSchema = new mongoose.Schema({
     },
     paymentGateway: {
         type: String,
-        enum: ['payu', 'easebuzz', 'cashfree', 'enkash'],
+        enum: ['payu', 'easebuzz', 'cashfree', 'enkash', 'vegapay'],
         required: true
     },
     status: {
