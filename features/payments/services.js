@@ -291,12 +291,14 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
             },
             terminalId: terminalId,
             password: password,
+            merchantIp: PAYMENT_CONFIG.vegapay.merchantIp || '74.220.52.1', // ✅ ADDED: Required for Production
             signature: signature,
             amount: amountStr,
             currency: currency,
             customer: {        // ✅ CORRECTED: Use nested "customer" object with correct field names
                 customerEmail: email,
                 mobileNumber: phone,
+                customerIp: "127.0.0.1", // ✅ ADDED: Required field
                 billingAddressStreet: data.customerDetails.address || "N/A",
                 billingAddressCity: data.customerDetails.city || "N/A",
                 billingAddressState: data.customerDetails.state || "N/A",
