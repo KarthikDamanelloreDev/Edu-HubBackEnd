@@ -344,7 +344,10 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Accept': 'application/json'
+                    'Accept': 'application/json, text/plain, */*',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive'
                 },
                 body: JSON.stringify(payload)
             });
