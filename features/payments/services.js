@@ -283,33 +283,33 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
         });
 
         const payload = {
-            trackId: transactionId,
+            tranId: transactionId,
             terminalId,
             password,
             action: "1", // 1 = Purchase
-            merchantIp: "127.0.0.1",
+            trackid: transactionId, // Separate trackid field (lowercase)
             amount: amountStr,
-            currency,
+            address: data.customerDetails.address || "N/A",
+            customerIp: ipAddress || "127.0.0.1",
+            merchantIp: "127.0.0.1",
+            city: data.customerDetails.city || "N/A",
+            zipCode: data.customerDetails.zip || "000000",
+            state: data.customerDetails.state || "N/A",
             country: "IN",
-            requestHash: signature,
+            contactNumber: phone,
+            customerEmail: email,
+            cardHolderName: `${firstName} ${lastName}`,
             udf1: userId.toString(),
             udf2: productInfo,
             udf3: "",
             udf4: "",
             udf5: "",
-            customerEmail: email,
-            customerName: `${firstName} ${lastName}`,
-            customerPhone: phone,
-            billingAddress: data.customerDetails.address || "N/A",
-            billingCity: data.customerDetails.city || "N/A",
-            billingState: data.customerDetails.state || "N/A",
-            billingPostalCode: data.customerDetails.zip || "000000",
-            billingCountry: "IN",
-            orderDescription: productInfo
+            currency,
+            requestHash: signature
         };
 
         try {
-            const endpoint = `${baseUrl}/CORE_2.2.2/v2/payments/pay-request`;
+            const endpoint = `${baseUrl}/CORE_2.2.2/transaction/jsonProcess/JSONrequest`;
             console.log(`[Vegaah] Initiating payment at ${endpoint} for ${transactionId}`);
             console.log(`[Vegaah] Request Payload:`, JSON.stringify(payload, null, 2));
 
@@ -343,13 +343,27 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
 
             console.log("[Vegaah] Response JSON:", JSON.stringify(res));
 
-            // Check for success
-            if (res.responseCode === "001" || res.responseCode === "000") {
+            // Check for success - Vegaah may return different response codes
+            if (res.responseCode === "001" || res.responseCode === "000" || res.result === "SUCCESS" || res.status === "SUCCESS") {
+                // Look for payment URL in various possible fields
+                let link = null;
+
                 if (res.paymentLink && res.paymentLink.linkUrl) {
-                    let link = res.paymentLink.linkUrl;
+                    link = res.paymentLink.linkUrl;
+                } else if (res.paymentUrl) {
+                    link = res.paymentUrl;
+                } else if (res.redirectUrl) {
+                    link = res.redirectUrl;
+                } else if (res.url) {
+                    link = res.url;
+                } else if (res.paymentLink && typeof res.paymentLink === 'string') {
+                    link = res.paymentLink;
+                }
+
+                if (link) {
                     // If it's a relative URL, prepend base and context
                     if (link.startsWith('/')) {
-                        link = `${baseUrl}/CORE_2.2.2${link}`;
+                        link = `${baseUrl}${link}`;
                     }
 
                     return {
@@ -359,12 +373,14 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
                         }
                     };
                 } else {
+                    // Success but no payment link - log full response for debugging
+                    console.error("[Vegaah] Success response but no payment link found. Full response:", JSON.stringify(res));
                     throw new Error("Payment link not found in successful response");
                 }
             }
 
             // Handle error response
-            const errorMsg = res.responseDescription || res.message || res.result || `Error code: ${res.responseCode}`;
+            const errorMsg = res.responseDescription || res.message || res.result || res.error || `Error code: ${res.responseCode}`;
             console.error("[Vegaah] Payment failed:", errorMsg);
             throw new Error(`Vegaah: ${errorMsg}`);
 
