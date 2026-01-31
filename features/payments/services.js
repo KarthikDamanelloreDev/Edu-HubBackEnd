@@ -30,7 +30,8 @@ const PAYMENT_CONFIG = {
         terminalId: process.env.VEGAAH_TERMINAL_ID,
         password: process.env.VEGAAH_PASSWORD,
         merchantKey: process.env.VEGAAH_MERCHANT_KEY,
-        baseUrl: process.env.VEGAAH_URL || 'https://vegaah.concertosoft.com'
+        baseUrl: process.env.VEGAAH_URL || 'https://vegaah.concertosoft.com',
+        merchantIp: process.env.VEGAAH_MERCHANT_IP || '127.0.0.1'
     }
 };
 
@@ -266,7 +267,19 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
     }
 
     if (data.paymentMethod === 'vegapay') {
-        const { terminalId, password, merchantKey, baseUrl } = PAYMENT_CONFIG.vegapay;
+        console.log("[Vegaah] ========== VEGAAH PAYMENT INITIATION ==========");
+        console.log("[Vegaah] Frontend Payload Received:", JSON.stringify(data, null, 2));
+        console.log("[Vegaah] Extracted Customer Details:");
+        console.log(`  - Name: ${firstName} ${lastName}`);
+        console.log(`  - Email: ${email}`);
+        console.log(`  - Phone: ${phone}`);
+        console.log(`  - Address: ${data.customerDetails.address}`);
+        console.log(`  - City: ${data.customerDetails.city}`);
+        console.log(`  - State: ${data.customerDetails.state}`);
+        console.log(`  - Zip: ${data.customerDetails.zip}`);
+        console.log(`  - Country: ${data.customerDetails.country}`);
+
+        const { terminalId, password, merchantKey, baseUrl, merchantIp } = PAYMENT_CONFIG.vegapay;
         if (!terminalId || !merchantKey) throw new Error('Vegaah Config Missing');
 
         const trackId = transactionId;
@@ -291,7 +304,7 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
             amount: amountStr,
             address: data.customerDetails.address || "N/A",
             customerIp: ipAddress || "127.0.0.1",
-            merchantIp: "127.0.0.1",
+            merchantIp: merchantIp || "127.0.0.1",
             city: data.customerDetails.city || "N/A",
             zipCode: data.customerDetails.zip || "000000",
             state: data.customerDetails.state || "N/A",
@@ -308,10 +321,24 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
             requestHash: signature
         };
 
+        console.log("[Vegaah] ========== TRANSFORMATION COMPLETE ==========");
+        console.log("[Vegaah] Frontend → Vegaah Mapping:");
+        console.log(`  firstName + lastName → cardHolderName: "${payload.cardHolderName}"`);
+        console.log(`  phone → contactNumber: "${payload.contactNumber}"`);
+        console.log(`  email → customerEmail: "${payload.customerEmail}"`);
+        console.log(`  address → address: "${payload.address}"`);
+        console.log(`  city → city: "${payload.city}"`);
+        console.log(`  state → state: "${payload.state}"`);
+        console.log(`  zip → zipCode: "${payload.zipCode}"`);
+        console.log(`  country → country: "${payload.country}"`);
+        console.log("[Vegaah] Full Vegaah Payload to be sent:");
+        console.log(JSON.stringify(payload, null, 2));
+
         try {
             const endpoint = `${baseUrl}/CORE_2.2.2/transaction/jsonProcess/JSONrequest`;
-            console.log(`[Vegaah] Initiating payment at ${endpoint} for ${transactionId}`);
-            console.log(`[Vegaah] Request Payload:`, JSON.stringify(payload, null, 2));
+            console.log(`[Vegaah] ========== CALLING VEGAAH API ==========`);
+            console.log(`[Vegaah] Endpoint: ${endpoint}`);
+            console.log(`[Vegaah] Transaction ID: ${transactionId}`);
 
             const resp = await fetch(endpoint, {
                 method: 'POST',
