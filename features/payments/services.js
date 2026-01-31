@@ -308,45 +308,66 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
             orderDescription: productInfo
         };
 
-        console.log("[Vegaah] Request Payload:", JSON.stringify(payload, null, 2));
-
         try {
             const endpoint = `${baseUrl}/CORE_2.2.2/v2/payments/pay-request`;
             console.log(`[Vegaah] Initiating payment at ${endpoint} for ${transactionId}`);
+            console.log(`[Vegaah] Request Payload:`, JSON.stringify(payload, null, 2));
+
             const resp = await fetch(endpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
                 body: JSON.stringify(payload)
             });
 
+            console.log(`[Vegaah] HTTP Status: ${resp.status} ${resp.statusText}`);
             const text = await resp.text();
-            console.log("[Vegaah] Raw Response Text:", text.substring(0, 500));
+            console.log("[Vegaah] Raw Response Text:", text.substring(0, 1000));
+
+            // Check if response is HTML (error page)
+            if (text.trim().startsWith('<')) {
+                console.error("[Vegaah] Received HTML instead of JSON. Full response:", text);
+                throw new Error(`Vegaah API returned HTML error page (HTTP ${resp.status}). The endpoint might be incorrect or the service is unavailable.`);
+            }
 
             let res;
             try {
                 res = JSON.parse(text);
             } catch (parseErr) {
                 console.error(`[Vegaah] JSON Parse Failed for URL: ${endpoint}`);
-                throw new Error("Gateway returned invalid response format.");
+                console.error(`[Vegaah] Response was: ${text.substring(0, 500)}`);
+                throw new Error(`Gateway returned invalid JSON. Response: ${text.substring(0, 200)}`);
             }
+
             console.log("[Vegaah] Response JSON:", JSON.stringify(res));
 
-            if (res.responseCode === "001" || (res.paymentLink && res.paymentLink.linkUrl)) {
-                let link = res.paymentLink.linkUrl;
-                // If it's a relative URL, prepend base and context
-                if (link.startsWith('/')) {
-                    link = `${baseUrl}/CORE_2.2.2${link}`;
-                }
-
-                return {
-                    status: 'success',
-                    data: {
-                        paymentLink: link
+            // Check for success
+            if (res.responseCode === "001" || res.responseCode === "000") {
+                if (res.paymentLink && res.paymentLink.linkUrl) {
+                    let link = res.paymentLink.linkUrl;
+                    // If it's a relative URL, prepend base and context
+                    if (link.startsWith('/')) {
+                        link = `${baseUrl}/CORE_2.2.2${link}`;
                     }
-                };
+
+                    return {
+                        status: 'success',
+                        data: {
+                            paymentLink: link
+                        }
+                    };
+                } else {
+                    throw new Error("Payment link not found in successful response");
+                }
             }
 
-            throw new Error(res.responseDescription || res.message || "Vegaah Error");
+            // Handle error response
+            const errorMsg = res.responseDescription || res.message || res.result || `Error code: ${res.responseCode}`;
+            console.error("[Vegaah] Payment failed:", errorMsg);
+            throw new Error(`Vegaah: ${errorMsg}`);
+
         } catch (e) {
             console.error("[Vegaah] Error:", e.message);
             throw e;
