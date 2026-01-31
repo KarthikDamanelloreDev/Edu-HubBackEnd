@@ -30,7 +30,7 @@ const PAYMENT_CONFIG = {
         terminalId: process.env.VEGAAH_TERMINAL_ID,
         password: process.env.VEGAAH_PASSWORD,
         merchantKey: process.env.VEGAAH_MERCHANT_KEY,
-        baseUrl: process.env.VEGAAH_URL || 'https://vegaah.concertosoft.com',
+        baseUrl: process.env.VEGAAH_URL || 'https://test-vegaah.concertosoft.com',
         merchantIp: process.env.VEGAAH_MERCHANT_IP || '127.0.0.1'
     }
 };
@@ -303,7 +303,7 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
             trackid: transactionId, // Separate trackid field (lowercase)
             amount: amountStr,
             address: data.customerDetails.address || "N/A",
-            customerIp: ipAddress || "127.0.0.1",
+            customerIp: (ipAddress || "127.0.0.1").split(',')[0].trim(),
             merchantIp: merchantIp || "127.0.0.1",
             city: data.customerDetails.city || "N/A",
             zipCode: data.customerDetails.zip || "000000",
@@ -350,6 +350,8 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
             });
 
             console.log(`[Vegaah] HTTP Status: ${resp.status} ${resp.statusText}`);
+            console.log(`[Vegaah] Response Headers:`, JSON.stringify(Object.fromEntries(resp.headers.entries())));
+
             const text = await resp.text();
             console.log("[Vegaah] Raw Response Text:", text.substring(0, 1000));
 
