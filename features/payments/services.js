@@ -30,7 +30,7 @@ const PAYMENT_CONFIG = {
         terminalId: process.env.VEGAAH_TERMINAL_ID,
         password: process.env.VEGAAH_PASSWORD,
         merchantKey: process.env.VEGAAH_MERCHANT_KEY,
-        baseUrl: process.env.VEGAAH_URL || 'https://test-vegaah.concertosoft.com',
+        baseUrl: process.env.VEGAAH_URL || 'https://vegaah.concertosoft.com',
         contextPath: process.env.VEGAAH_CONTEXT_PATH || 'CORE_2.2.2',
         merchantIp: process.env.VEGAAH_MERCHANT_IP || '127.0.0.1'
     }
@@ -258,9 +258,10 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
     }
 
     if (data.paymentMethod === 'vegapay') {
-        console.log('[Vegaah] ========== PAYMENT INITIATION ==========');
+        console.log('[Vegaah PRODUCTION] ========== PAYMENT INITIATION ==========');
         console.log('[Vegaah] Transaction ID:', transactionId);
         console.log('[Vegaah] Amount:', totalAmount);
+        console.log('[Vegaah] Environment: PRODUCTION');
 
         const { terminalId, password, merchantKey, baseUrl, contextPath } = PAYMENT_CONFIG.vegapay;
 
@@ -328,13 +329,23 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
             });
 
             console.log('[Vegaah] Response Status:', response.status);
+            console.log('[Vegaah] Response Headers:', JSON.stringify(Object.fromEntries(response.headers.entries())));
 
             const responseText = await response.text();
             console.log('[Vegaah] Raw Response:', responseText.substring(0, 500));
+            console.log('[Vegaah] Response Length:', responseText.length);
 
             // Validate response
             if (!responseText || responseText.trim().length === 0) {
-                throw new Error('Empty response from Vegaah gateway');
+                console.error('[Vegaah] ❌ EMPTY RESPONSE RECEIVED');
+                console.error('[Vegaah] This usually indicates:');
+                console.error('[Vegaah]   1. IP whitelisting issue - Your server IP may not be whitelisted');
+                console.error('[Vegaah]   2. Terminal ID not activated for this environment');
+                console.error('[Vegaah]   3. Merchant configuration issue');
+                console.error('[Vegaah] Server IP that made the request:', ipAddress);
+                console.error('[Vegaah] Terminal ID:', terminalId);
+                console.error('[Vegaah] Base URL:', baseUrl);
+                throw new Error('Empty response from Vegaah gateway. This may be due to IP whitelisting. Please contact Vegaah support to whitelist your server IP or verify terminal configuration.');
             }
 
             if (responseText.trim().startsWith('<')) {
