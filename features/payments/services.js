@@ -307,20 +307,32 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
         };
 
         try {
-            console.log(`[Vegaah] Initiating payment for ${transactionId}`);
-            const resp = await fetch(`${baseUrl}/v2/payments/pay-request`, {
+            const endpoint = `${baseUrl}/CORE_2.2.2/v2/payments/pay-request`;
+            console.log(`[Vegaah] Initiating payment at ${endpoint} for ${transactionId}`);
+            const resp = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
 
-            const res = await resp.json();
-            console.log("[Vegaah] Response:", JSON.stringify(res));
+            const text = await resp.text();
+            console.log("[Vegaah] Raw Response Text:", text.substring(0, 500));
+
+            let res;
+            try {
+                res = JSON.parse(text);
+            } catch (parseErr) {
+                console.error(`[Vegaah] JSON Parse Failed for URL: ${endpoint}`);
+                throw new Error("Gateway returned invalid response format.");
+            }
+            console.log("[Vegaah] Response JSON:", JSON.stringify(res));
 
             if (res.responseCode === "001" || (res.paymentLink && res.paymentLink.linkUrl)) {
                 let link = res.paymentLink.linkUrl;
-                // If it's a relative URL, prepend base
-                if (link.startsWith('/')) link = `${baseUrl}${link}`;
+                // If it's a relative URL, prepend base and context
+                if (link.startsWith('/')) {
+                    link = `${baseUrl}/CORE_2.2.2${link}`;
+                }
 
                 return {
                     status: 'success',
