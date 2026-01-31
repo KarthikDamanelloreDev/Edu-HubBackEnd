@@ -285,8 +285,8 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
             trackid: transactionId,
             amount: amountStr,
             address: data.customerDetails.address || "N/A",
-            customerIp: (ipAddress || "127.0.0.1").split(',')[0].trim(),
-            merchantIp: merchantIp || "127.0.0.1",
+            customerIp: "127.0.0.1", // Force localhost for testing
+            merchantIp: "127.0.0.1", // Force localhost for testing
             city: data.customerDetails.city || "N/A",
             zipCode: data.customerDetails.zip || "000000",
             state: data.customerDetails.state || "N/A",
@@ -360,7 +360,7 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
         console.log("[Vegaah] Will try multiple endpoint variations...");
 
         let lastError = null;
-        
+
         // TRY EACH ENDPOINT WITH BOTH PAYLOADS
         for (const endpoint of endpoints) {
             for (const payloadType of ['primary', 'alternative', 'formEncoded']) {
@@ -412,7 +412,7 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
                     console.log(`[Vegaah] Content-Type: ${contentType}, Content-Length: ${contentLength}`);
 
                     const text = await resp.text();
-                    
+
                     // CHECK IF EMPTY RESPONSE
                     if (!text || text.trim().length === 0) {
                         console.log(`[Vegaah] Empty response - trying next configuration...`);
@@ -442,10 +442,10 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
                     console.log("[Vegaah] Response JSON:", JSON.stringify(res));
 
                     // CHECK FOR SUCCESS
-                    if (res.responseCode === "001" || res.responseCode === "000" || 
+                    if (res.responseCode === "001" || res.responseCode === "000" ||
                         res.result === "SUCCESS" || res.status === "SUCCESS" ||
                         res.paymentLink || res.paymentUrl || res.redirectUrl) {
-                        
+
                         let link = null;
 
                         // EXTRACT PAYMENT LINK
@@ -503,7 +503,7 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
                 } catch (e) {
                     console.error(`[Vegaah] Exception with ${endpoint} (${payloadType}):`, e.message);
                     lastError = e.message;
-                    
+
                     // If it's a real error (not config issue), throw it
                     if (e.message.includes('Vegaah:')) {
                         throw e;
