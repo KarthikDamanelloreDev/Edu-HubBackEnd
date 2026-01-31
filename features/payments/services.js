@@ -44,7 +44,7 @@ const generateVegaahHash = (params) => {
     const { trackId, terminalId, password, merchantKey, amount, currency } = params;
     const hashStr = `${trackId}|${terminalId}|${password}|${merchantKey}|${amount}|${currency}`;
     console.log(`[Vegaah Hash] Input String: ${hashStr}`);
-    return crypto.createHash('sha256').update(hashStr).digest('hex');
+    return crypto.createHash('sha256').update(hashStr).digest('hex').toUpperCase(); // ✅ UPDATE: Uppercase signature
 };
 
 /**
