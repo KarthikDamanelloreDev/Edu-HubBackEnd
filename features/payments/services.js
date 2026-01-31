@@ -31,6 +31,7 @@ const PAYMENT_CONFIG = {
         password: process.env.VEGAAH_PASSWORD,
         merchantKey: process.env.VEGAAH_MERCHANT_KEY,
         baseUrl: process.env.VEGAAH_URL || 'https://test-vegaah.concertosoft.com',
+        contextPath: process.env.VEGAAH_CONTEXT_PATH || 'CORE_2.2.2',
         merchantIp: process.env.VEGAAH_MERCHANT_IP || '127.0.0.1'
     }
 };
@@ -257,18 +258,22 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
     }
 
     if (data.paymentMethod === 'vegapay') {
-        console.log("[Vegaah] ========== VEGAAH PAYMENT INITIATION ==========");
-        console.log("[Vegaah] Frontend Payload Received:", JSON.stringify(data, null, 2));
+        console.log('[Vegaah] ========== PAYMENT INITIATION ==========');
+        console.log('[Vegaah] Transaction ID:', transactionId);
+        console.log('[Vegaah] Amount:', totalAmount);
 
-        const { terminalId, password, merchantKey, baseUrl, merchantIp } = PAYMENT_CONFIG.vegapay;
-        if (!terminalId || !merchantKey) throw new Error('Vegaah Config Missing');
+        const { terminalId, password, merchantKey, baseUrl, contextPath } = PAYMENT_CONFIG.vegapay;
 
-        const trackId = transactionId;
-        const currency = 'INR';
-        const amountStr = totalAmount.toFixed(2);
+        if (!terminalId || !merchantKey) {
+            throw new Error('Vegaah configuration missing');
+        }
 
+        const amountStr = parseFloat(totalAmount).toFixed(2);
+        const currency = 'INR'; // ✅ CORRECTED: Use INR for India setup
+
+        // Generate signature
         const signature = generateVegaahHash({
-            trackId,
+            trackId: transactionId,
             terminalId,
             password,
             merchantKey,
@@ -276,246 +281,119 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
             currency
         });
 
-        // PRIMARY PAYLOAD - Standard format
-        const primaryPayload = {
-            tranId: transactionId,
-            terminalId,
-            password,
-            action: "1",
-            trackid: transactionId,
+        // Build request payload according to documentation (Section 3.2.1, page 7)
+        const requestPayload = {
+            paymentType: "1", // ✅ CORRECTED: Use "paymentType" not "action"
+            order: {           // ✅ CORRECTED: Use nested "order" object
+                orderId: transactionId,
+                description: productInfo
+            },
+            terminalId: terminalId,
+            password: password,
+            signature: signature,
             amount: amountStr,
-            address: data.customerDetails.address || "N/A",
-            customerIp: "127.0.0.1", // Force localhost for testing
-            merchantIp: "127.0.0.1", // Force localhost for testing
-            city: data.customerDetails.city || "N/A",
-            zipCode: data.customerDetails.zip || "000000",
-            state: data.customerDetails.state || "N/A",
-            country: "IN",
-            contactNumber: phone,
-            customerEmail: email,
-            cardHolderName: `${firstName} ${lastName}`,
-            udf1: userId.toString(),
-            udf2: productInfo,
-            udf3: "",
-            udf4: "",
-            udf5: "",
-            currency,
-            requestHash: signature,
-            // CRITICAL: Add return URLs
-            returnUrl: REDIRECT_URLS.frontendSuccess,
-            errorUrl: REDIRECT_URLS.frontendFailure,
-            responseUrl: REDIRECT_URLS.callback
-        };
-
-        // ALTERNATIVE PAYLOAD - Nested structure
-        const alternativePayload = {
-            terminalId,
-            password,
-            transaction: {
-                tranId: transactionId,
-                trackid: transactionId,
-                action: "1",
-                amount: amountStr,
-                currency
+            currency: currency,
+            customer: {        // ✅ CORRECTED: Use nested "customer" object with correct field names
+                customerEmail: email,
+                mobileNumber: phone,
+                billingAddressStreet: data.customerDetails.address || "N/A",
+                billingAddressCity: data.customerDetails.city || "N/A",
+                billingAddressState: data.customerDetails.state || "N/A",
+                billingAddressPostalCode: data.customerDetails.zip || "000000",
+                billingAddressCountry: "IN"
             },
-            customer: {
-                name: `${firstName} ${lastName}`,
-                email,
-                phone,
-                address: data.customerDetails.address || "N/A",
-                city: data.customerDetails.city || "N/A",
-                state: data.customerDetails.state || "N/A",
-                zipCode: data.customerDetails.zip || "000000",
-                country: "IN",
-                customerIp: (ipAddress || "127.0.0.1").split(',')[0].trim()
-            },
-            merchant: {
-                merchantIp: merchantIp || "127.0.0.1"
-            },
-            udf: {
-                udf1: userId.toString(),
-                udf2: productInfo,
-                udf3: "",
-                udf4: "",
-                udf5: ""
-            },
-            urls: {
-                returnUrl: REDIRECT_URLS.frontendSuccess,
-                errorUrl: REDIRECT_URLS.frontendFailure,
-                callbackUrl: REDIRECT_URLS.callback
-            },
-            requestHash: signature
-        };
-
-        // POSSIBLE ENDPOINTS TO TRY
-        const endpoints = [
-            `/CORE_2.2.2/transaction/jsonProcess`,           // WITHOUT JSONrequest
-            `/CORE_2.2.2/transaction/jsonProcess/JSONrequest`, // Current
-            `/api/transaction/create`,
-            `/payment/initiate`,
-            `/transaction/create`,
-            `/api/v1/payment/initiate`
-        ];
-
-        console.log("[Vegaah] Will try multiple endpoint variations...");
-
-        let lastError = null;
-
-        // TRY EACH ENDPOINT WITH BOTH PAYLOADS
-        for (const endpoint of endpoints) {
-            for (const payloadType of ['primary', 'alternative', 'formEncoded']) {
-                try {
-                    const fullUrl = `${baseUrl}${endpoint}`;
-                    console.log(`\n[Vegaah] ========== ATTEMPT ==========`);
-                    console.log(`[Vegaah] Endpoint: ${fullUrl}`);
-                    console.log(`[Vegaah] Payload Type: ${payloadType}`);
-
-                    let requestConfig;
-                    let currentPayload;
-
-                    if (payloadType === 'formEncoded') {
-                        // Try as URL-encoded form data
-                        currentPayload = primaryPayload;
-                        const formData = new URLSearchParams();
-                        Object.keys(currentPayload).forEach(key => {
-                            formData.append(key, currentPayload[key]);
-                        });
-
-                        requestConfig = {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/x-www-form-urlencoded',
-                                'Accept': 'application/json',
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                            },
-                            body: formData.toString()
-                        };
-                    } else {
-                        // Try as JSON
-                        currentPayload = payloadType === 'primary' ? primaryPayload : alternativePayload;
-                        requestConfig = {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Accept': 'application/json',
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                            },
-                            body: JSON.stringify(currentPayload)
-                        };
-                    }
-
-                    const resp = await fetch(fullUrl, requestConfig);
-                    console.log(`[Vegaah] HTTP Status: ${resp.status}`);
-
-                    const contentType = resp.headers.get('content-type') || '';
-                    const contentLength = resp.headers.get('content-length') || '0';
-                    console.log(`[Vegaah] Content-Type: ${contentType}, Content-Length: ${contentLength}`);
-
-                    const text = await resp.text();
-
-                    // CHECK IF EMPTY RESPONSE
-                    if (!text || text.trim().length === 0) {
-                        console.log(`[Vegaah] Empty response - trying next configuration...`);
-                        lastError = `Empty response from ${endpoint} with ${payloadType}`;
-                        continue;
-                    }
-
-                    console.log("[Vegaah] Raw Response:", text.substring(0, 500));
-
-                    // CHECK IF HTML ERROR PAGE
-                    if (text.trim().startsWith('<')) {
-                        console.error("[Vegaah] Received HTML - trying next configuration...");
-                        lastError = `HTML response from ${endpoint}`;
-                        continue;
-                    }
-
-                    // TRY TO PARSE JSON
-                    let res;
-                    try {
-                        res = JSON.parse(text);
-                    } catch (parseErr) {
-                        console.error(`[Vegaah] JSON Parse Failed - trying next configuration...`);
-                        lastError = `Invalid JSON from ${endpoint}`;
-                        continue;
-                    }
-
-                    console.log("[Vegaah] Response JSON:", JSON.stringify(res));
-
-                    // CHECK FOR SUCCESS
-                    if (res.responseCode === "001" || res.responseCode === "000" ||
-                        res.result === "SUCCESS" || res.status === "SUCCESS" ||
-                        res.paymentLink || res.paymentUrl || res.redirectUrl) {
-
-                        let link = null;
-
-                        // EXTRACT PAYMENT LINK
-                        if (res.paymentLink && res.paymentLink.linkUrl) {
-                            link = res.paymentLink.linkUrl;
-                        } else if (res.paymentUrl) {
-                            link = res.paymentUrl;
-                        } else if (res.redirectUrl) {
-                            link = res.redirectUrl;
-                        } else if (res.url) {
-                            link = res.url;
-                        } else if (res.paymentLink && typeof res.paymentLink === 'string') {
-                            link = res.paymentLink;
-                        } else if (res.data && res.data.paymentUrl) {
-                            link = res.data.paymentUrl;
-                        } else if (res.data && res.data.redirectUrl) {
-                            link = res.data.redirectUrl;
-                        }
-
-                        if (link) {
-                            // Fix relative URLs
-                            if (link.startsWith('/')) {
-                                link = `${baseUrl}${link}`;
-                            }
-
-                            console.log(`[Vegaah] ✓ SUCCESS! Payment link obtained: ${link}`);
-                            console.log(`[Vegaah] Successful configuration: ${endpoint} with ${payloadType}`);
-
-                            return {
-                                status: 'success',
-                                data: {
-                                    paymentLink: link
-                                }
-                            };
-                        } else {
-                            console.error("[Vegaah] Success response but no payment link found");
-                            lastError = `No payment link in successful response from ${endpoint}`;
-                            continue;
-                        }
-                    }
-
-                    // CHECK FOR ERROR RESPONSE
-                    const errorMsg = res.responseDescription || res.message || res.result || res.error || res.errorMessage;
-                    if (errorMsg) {
-                        console.error(`[Vegaah] Error from gateway: ${errorMsg}`);
-                        lastError = `Gateway error: ${errorMsg}`;
-                        // Don't continue - this is a real error, not configuration issue
-                        throw new Error(`Vegaah: ${errorMsg}`);
-                    }
-
-                    // UNKNOWN RESPONSE FORMAT
-                    console.log(`[Vegaah] Unknown response format - trying next configuration...`);
-                    lastError = `Unknown response format from ${endpoint}`;
-
-                } catch (e) {
-                    console.error(`[Vegaah] Exception with ${endpoint} (${payloadType}):`, e.message);
-                    lastError = e.message;
-
-                    // If it's a real error (not config issue), throw it
-                    if (e.message.includes('Vegaah:')) {
-                        throw e;
-                    }
-                }
+            additionalDetails: {
+                userData: JSON.stringify({
+                    userId: userId.toString(),
+                    productInfo: productInfo
+                })
             }
-        }
+        };
 
-        // IF ALL ATTEMPTS FAILED
-        console.error("[Vegaah] ========== ALL ATTEMPTS FAILED ==========");
-        console.error("[Vegaah] Last Error:", lastError);
-        throw new Error(`Vegaah integration failed: ${lastError}. Please contact technical support with Transaction ID: ${transactionId}`);
+        console.log('[Vegaah] Request Payload:', JSON.stringify(requestPayload, null, 2));
+
+        // ✅ CORRECTED: Use correct API endpoint from documentation
+        const apiUrl = `${baseUrl}/${contextPath}/v2/payments/pay-request`;
+
+        console.log('[Vegaah] API URL:', apiUrl);
+
+        try {
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify(requestPayload)
+            });
+
+            console.log('[Vegaah] Response Status:', response.status);
+
+            const responseText = await response.text();
+            console.log('[Vegaah] Raw Response:', responseText.substring(0, 500));
+
+            // Validate response
+            if (!responseText || responseText.trim().length === 0) {
+                throw new Error('Empty response from Vegaah gateway');
+            }
+
+            if (responseText.trim().startsWith('<')) {
+                console.error('[Vegaah] Received HTML response - likely wrong endpoint');
+                throw new Error('Invalid endpoint - received HTML instead of JSON');
+            }
+
+            // Parse JSON response
+            let result;
+            try {
+                result = JSON.parse(responseText);
+            } catch (parseError) {
+                console.error('[Vegaah] JSON Parse Error:', parseError.message);
+                throw new Error('Invalid JSON response from gateway');
+            }
+
+            console.log('[Vegaah] Parsed Response:', JSON.stringify(result, null, 2));
+
+            // Check for success (responseCode "001" or "000")
+            if (result.responseCode === "001" || result.responseCode === "000") {
+                // Extract payment link
+                let paymentLink = null;
+
+                if (result.paymentLink && result.paymentLink.linkUrl) {
+                    paymentLink = result.paymentLink.linkUrl;
+                } else if (result.paymentUrl) {
+                    paymentLink = result.paymentUrl;
+                } else if (result.redirectUrl) {
+                    paymentLink = result.redirectUrl;
+                }
+
+                if (paymentLink) {
+                    // Fix relative URLs
+                    if (paymentLink.startsWith('/')) {
+                        paymentLink = `${baseUrl}${paymentLink}`;
+                    }
+
+                    console.log('[Vegaah] ✓ SUCCESS! Payment Link:', paymentLink);
+
+                    return {
+                        status: 'success',
+                        data: {
+                            paymentLink: paymentLink
+                        }
+                    };
+                } else {
+                    throw new Error('Payment link not found in successful response');
+                }
+            } else {
+                // Error response
+                const errorMsg = result.responseDescription || result.message || 'Payment initialization failed';
+                console.error('[Vegaah] Gateway Error:', errorMsg);
+                throw new Error(`Vegaah: ${errorMsg}`);
+            }
+
+        } catch (error) {
+            console.error('[Vegaah] Exception:', error.message);
+            throw new Error(`Vegaah payment failed: ${error.message}`);
+        }
     }
 
     throw new Error('Unsupported Method');
@@ -542,17 +420,52 @@ const verifyPayment = async (userId, data) => {
         const enkashStatus = data.status || data.transactionStatus || data.orderStatus;
         isSuccessful = (enkashStatus === 'SUCCESS' || enkashStatus === 'PAID');
     } else if (transaction.paymentGateway === 'vegapay') {
+        console.log('[Vegaah] ========== PAYMENT VERIFICATION ==========');
+
         let finalData = data;
-        if (data.data) {
+
+        // Check if response is encrypted
+        if (data.data && typeof data.data === 'string') {
+            console.log('[Vegaah] Encrypted response detected, decrypting...');
             try {
                 finalData = decryptVegaahResponse(data.data, PAYMENT_CONFIG.vegapay.merchantKey);
-                console.log("[Vegaah Verify] Decrypted Data:", JSON.stringify(finalData));
             } catch (err) {
-                console.error("[Vegaah Verify] Decryption failed:", err.message);
+                console.error('[Vegaah] Decryption failed:', err.message);
+                throw new Error('Failed to decrypt payment response');
             }
         }
-        const vegaahStatus = finalData.result || finalData.responseDescription || finalData.status;
-        isSuccessful = (vegaahStatus === 'SUCCESS' || finalData.responseCode === "001" || finalData.responseCode === "000");
+
+        console.log('[Vegaah] Decrypted Data:', JSON.stringify(finalData, null, 2));
+
+        // Verify signature if present
+        if (finalData.signature && finalData.transactionId && finalData.amountDetails) {
+            const { transactionId, responseCode, amountDetails } = finalData;
+            const amount = parseFloat(amountDetails.amount).toFixed(2);
+            const merchantKey = PAYMENT_CONFIG.vegapay.merchantKey;
+
+            const hashString = `${transactionId}|${merchantKey}|${responseCode}|${amount}`;
+            const expectedSignature = crypto.createHash('sha256').update(hashString).digest('hex');
+
+            console.log('[Vegaah] Signature Verification:');
+            console.log('  Hash String:', hashString);
+            console.log('  Expected:', expectedSignature);
+            console.log('  Received:', finalData.signature);
+
+            if (expectedSignature !== finalData.signature) {
+                console.error('[Vegaah] Signature verification failed!');
+                throw new Error('Invalid response signature');
+            }
+
+            console.log('[Vegaah] ✓ Signature verified successfully');
+        }
+
+        // Check payment status
+        isSuccessful = (
+            finalData.result === 'SUCCESS' ||
+            finalData.responseCode === '000' ||
+            finalData.responseCode === '001'
+        );
+
         data = finalData;
     } else {
         isSuccessful = data.status === 'success' || data.txStatus === 'SUCCESS' || data.order_status === 'PAID' || data.result === 'success';
