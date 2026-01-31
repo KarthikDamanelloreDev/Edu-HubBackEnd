@@ -25,6 +25,42 @@ const PAYMENT_CONFIG = {
         secret: process.env.ENKASH_SECRET,
         mid: process.env.ENKASH_MID || 'CEKJK1EYSA', // From Dashboard: EnKash Company ID
         baseUrl: process.env.ENKASH_URL || 'https://olympus-pg.enkash.in/api/v0'
+    },
+    vegapay: {
+        terminalId: process.env.VEGAAH_TERMINAL_ID,
+        password: process.env.VEGAAH_PASSWORD,
+        merchantKey: process.env.VEGAAH_MERCHANT_KEY,
+        baseUrl: process.env.VEGAAH_URL || 'https://vegaah.concertosoft.com'
+    }
+};
+
+/**
+ * Vegaah Signature Generator
+ * Format: trackId|terminalId|password|mechantkey|amount|currency
+ */
+const generateVegaahHash = (params) => {
+    const { trackId, terminalId, password, merchantKey, amount, currency } = params;
+    const hashStr = `${trackId}|${terminalId}|${password}|${merchantKey}|${amount}|${currency}`;
+    console.log(`[Vegaah Hash] Input String: ${hashStr}`);
+    return crypto.createHash('sha256').update(hashStr).digest('hex');
+};
+
+/**
+ * Vegaah Decryption Utility
+ * Based on Java AES defaults (ECB/PKCS5Padding)
+ */
+const decryptVegaahResponse = (encryptedData, merchantKeyHex) => {
+    try {
+        const key = Buffer.from(merchantKeyHex, 'hex');
+        // Node's aes-256-ecb default is PKCS7 which is compatible with Java's PKCS5
+        const decipher = crypto.createDecipheriv('aes-256-ecb', key, null);
+        decipher.setAutoPadding(true);
+        let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
+        decrypted += decipher.final('utf8');
+        return JSON.parse(decrypted);
+    } catch (error) {
+        console.error("[Vegaah Decrypt] Failed:", error.message);
+        throw new Error("Failed to decrypt gateway response");
     }
 };
 
@@ -229,6 +265,78 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
         }
     }
 
+    if (data.paymentMethod === 'vegapay') {
+        const { terminalId, password, merchantKey, baseUrl } = PAYMENT_CONFIG.vegapay;
+        if (!terminalId || !merchantKey) throw new Error('Vegaah Config Missing');
+
+        const trackId = transactionId;
+        const currency = 'INR';
+        const amountStr = totalAmount.toFixed(2);
+
+        const signature = generateVegaahHash({
+            trackId,
+            terminalId,
+            password,
+            merchantKey,
+            amount: amountStr,
+            currency
+        });
+
+        const payload = {
+            terminalId,
+            password,
+            signature,
+            paymentType: "1", // Purchase
+            amount: amountStr,
+            currency,
+            order: {
+                orderId: transactionId,
+                description: productInfo
+            },
+            customer: {
+                customerEmail: email,
+                billingAddressStreet: data.customerDetails.address || "N/A",
+                billingAddressCity: data.customerDetails.city || "N/A",
+                billingAddressState: data.customerDetails.state || "N/A",
+                billingAddressPostalCode: data.customerDetails.zip || "000000",
+                billingAddressCountry: "IN"
+            },
+            additionalDetails: {
+                userData: JSON.stringify({ userId: userId.toString() })
+            }
+        };
+
+        try {
+            console.log(`[Vegaah] Initiating payment for ${transactionId}`);
+            const resp = await fetch(`${baseUrl}/v2/payments/pay-request`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const res = await resp.json();
+            console.log("[Vegaah] Response:", JSON.stringify(res));
+
+            if (res.responseCode === "001" || (res.paymentLink && res.paymentLink.linkUrl)) {
+                let link = res.paymentLink.linkUrl;
+                // If it's a relative URL, prepend base
+                if (link.startsWith('/')) link = `${baseUrl}${link}`;
+
+                return {
+                    status: 'success',
+                    data: {
+                        paymentLink: link
+                    }
+                };
+            }
+
+            throw new Error(res.responseDescription || res.message || "Vegaah Error");
+        } catch (e) {
+            console.error("[Vegaah] Error:", e.message);
+            throw e;
+        }
+    }
+
     throw new Error('Unsupported Method');
 };
 
@@ -253,6 +361,21 @@ const verifyPayment = async (userId, data) => {
     if (transaction.paymentGateway === 'enkash') {
         const enkashStatus = data.status || data.transactionStatus || data.orderStatus;
         isSuccessful = (enkashStatus === 'SUCCESS' || enkashStatus === 'PAID');
+    } else if (transaction.paymentGateway === 'vegapay') {
+        // Handle encrypted response if present
+        let finalData = data;
+        if (data.data) {
+            try {
+                finalData = decryptVegaahResponse(data.data, PAYMENT_CONFIG.vegapay.merchantKey);
+                console.log("[Vegaah Verify] Decrypted Data:", JSON.stringify(finalData));
+            } catch (err) {
+                console.error("[Vegaah Verify] Decryption failed:", err.message);
+                // If decryption fails, we can't be sure of success
+            }
+        }
+        const vegaahStatus = finalData.result || finalData.responseDescription || finalData.status;
+        isSuccessful = (vegaahStatus === 'SUCCESS' || finalData.responseCode === "001" || finalData.responseCode === "000");
+        data = finalData; // Update data with decrypted version for storage
     } else {
         // Generic success check for other gateways
         isSuccessful = data.status === 'success' || data.txStatus === 'SUCCESS' || data.order_status === 'PAID' || data.result === 'success';
