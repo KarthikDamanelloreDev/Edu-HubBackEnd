@@ -283,28 +283,32 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
         });
 
         const payload = {
+            trackId: transactionId,
             terminalId,
             password,
-            signature,
-            paymentType: "1", // Purchase
+            action: "1", // 1 = Purchase
+            merchantIp: "127.0.0.1",
             amount: amountStr,
             currency,
-            order: {
-                orderId: transactionId,
-                description: productInfo
-            },
-            customer: {
-                customerEmail: email,
-                billingAddressStreet: data.customerDetails.address || "N/A",
-                billingAddressCity: data.customerDetails.city || "N/A",
-                billingAddressState: data.customerDetails.state || "N/A",
-                billingAddressPostalCode: data.customerDetails.zip || "000000",
-                billingAddressCountry: "IN"
-            },
-            additionalDetails: {
-                userData: JSON.stringify({ userId: userId.toString() })
-            }
+            country: "IN",
+            requestHash: signature,
+            udf1: userId.toString(),
+            udf2: productInfo,
+            udf3: "",
+            udf4: "",
+            udf5: "",
+            customerEmail: email,
+            customerName: `${firstName} ${lastName}`,
+            customerPhone: phone,
+            billingAddress: data.customerDetails.address || "N/A",
+            billingCity: data.customerDetails.city || "N/A",
+            billingState: data.customerDetails.state || "N/A",
+            billingPostalCode: data.customerDetails.zip || "000000",
+            billingCountry: "IN",
+            orderDescription: productInfo
         };
+
+        console.log("[Vegaah] Request Payload:", JSON.stringify(payload, null, 2));
 
         try {
             const endpoint = `${baseUrl}/CORE_2.2.2/v2/payments/pay-request`;
