@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { initiatePayment, verifyPayment, REDIRECT_URLS } = require('./services');
+const { decryptVegaah } = require('./utils/vegaahCrypto');
 const { OK, CREATED, BAD_REQUEST, INTERNAL_SERVER_ERROR } = require('../../utils/statuscodes');
 
 router.post('/initiate', async (req, res) => {
@@ -27,6 +28,25 @@ router.all('/callback', async (req, res) => {
     try {
         console.log('Payment Callback Received:', req.body || req.query);
         const data = { ...req.body, ...req.query };
+
+        // Vegaah Callback Handler
+        if (data.gateway === 'VEGAAH') {
+            try {
+                // Decrypt data to get orderId/transactionId
+                const decrypted = decryptVegaah(data.encData);
+
+                // If success, verify and redirect
+                if (decrypted.paymentStatus === "SUCCESS") {
+                    await verifyPayment(null, decrypted);
+                    return res.redirect(`${REDIRECT_URLS.frontendSuccess}&transactionId=${decrypted.orderId}`);
+                }
+
+                return res.redirect(`${REDIRECT_URLS.frontendFailure}`);
+            } catch (e) {
+                console.error("Vegaah Callback Error", e);
+                return res.redirect(`${REDIRECT_URLS.frontendFailure}`);
+            }
+        }
 
         // Basic check for success from common gateways
         const isSuccess = data.status === 'success' || data.status === 'SUCCESS' || data.txStatus === 'SUCCESS' || data.order_status === 'PAID' || data.result === 'success';
