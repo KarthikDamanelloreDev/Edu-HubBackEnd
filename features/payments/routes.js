@@ -48,6 +48,20 @@ router.all('/callback', async (req, res) => {
             }
         }
 
+        if (data.gateway === 'PINELABS') {
+            try {
+                const result = await verifyPayment(null, data);
+                const transactionId = data.ppc_UniqueMerchantTxnID;
+                if (result.status === 'success') {
+                    return res.redirect(`${REDIRECT_URLS.frontendSuccess}&transactionId=${transactionId}`);
+                }
+                return res.redirect(`${REDIRECT_URLS.frontendFailure}&message=Payment failed`);
+            } catch (e) {
+                console.error("Pine Labs Callback Error", e);
+                return res.redirect(`${REDIRECT_URLS.frontendFailure}&message=${encodeURIComponent(e.message)}`);
+            }
+        }
+
         // Basic check for success from common gateways
         const isSuccess = data.status === 'success' || data.status === 'SUCCESS' || data.txStatus === 'SUCCESS' || data.order_status === 'PAID' || data.result === 'success';
 

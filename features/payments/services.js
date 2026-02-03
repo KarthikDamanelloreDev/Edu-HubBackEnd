@@ -35,7 +35,36 @@ const PAYMENT_CONFIG = {
         baseUrl: process.env.VEGAAH_URL || 'https://vegaah.concertosoft.com',
         contextPath: process.env.VEGAAH_CONTEXT_PATH || 'CORE_2.2.2',
         merchantIp: process.env.VEGAAH_MERCHANT_IP || '127.0.0.1'
+    },
+    pinelabs: {
+        merchantId: process.env.PINELABS_MERCHANT_ID,
+        accessCode: process.env.PINELABS_ACCESS_CODE,
+        secret: process.env.PINELABS_SECRET,
+        isTest: process.env.PINELABS_IS_TEST === 'true',
+        baseUrl: (process.env.PINELABS_IS_TEST === 'true') ? "https://uat.pinepg.in/api/" : 'https://pinepg.in/api/'
     }
+};
+
+/**
+ * Generate Pine Labs Hash for X-VERIFY
+ */
+const generatePineLabsHash = (request, secret) => {
+    return crypto.createHmac("sha256", Buffer.from(secret, 'hex')).update(request).digest("hex").toUpperCase();
+};
+
+/**
+ * Verify Pine Labs Hash for Callback
+ */
+const verifyPineLabsHash = (request, hash, secret) => {
+    const sortedKeys = Object.keys(request).sort();
+    const dataString = sortedKeys
+        .map((key) => `${key}=${request[key]}`)
+        .join('&');
+    const newHash = crypto.createHmac('sha256', Buffer.from(secret, 'hex'))
+        .update(dataString)
+        .digest('hex')
+        .toUpperCase();
+    return newHash === hash;
 };
 
 /**
@@ -333,7 +362,73 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
         }, userId, ipAddress);
     }
 
+    if (data.paymentMethod === 'pinelabs' || data.paymentMethod === 'PINELABS') {
+        return initiatePineLabsPayment(userId, transactionId, totalAmount, data.customerDetails);
+    }
+
     throw new Error('Unsupported payment gateway');
+};
+
+/**
+ * Initiate Pine Labs Payment
+ */
+const initiatePineLabsPayment = async (userId, transactionId, amount, customerDetails) => {
+    const { merchantId, accessCode, secret, baseUrl } = PAYMENT_CONFIG.pinelabs;
+
+    // Pine labs amount is in paisa
+    const amountInPaisa = Math.round(amount * 100);
+
+    const body = {
+        merchant_data: {
+            merchant_id: merchantId,
+            merchant_access_code: accessCode,
+            unique_merchant_txn_id: transactionId,
+            merchant_return_url: `${REDIRECT_URLS.callback}?gateway=PINELABS`,
+        },
+        payment_data: {
+            amount_in_paisa: amountInPaisa.toString(),
+        },
+        txn_data: {
+            navigation_mode: 2,
+            payment_mode: "1,3,4,10,11,14,16,17,19,20", // All common modes
+            transaction_type: 1
+        },
+        customer_data: {
+            customer_id: userId.toString(),
+            email_id: customerDetails.email,
+            first_name: customerDetails.firstName,
+            last_name: customerDetails.lastName || "User",
+            mobile_no: customerDetails.phone,
+        }
+    };
+
+    const base64Data = Buffer.from(JSON.stringify(body)).toString("base64");
+    const hash = generatePineLabsHash(base64Data, secret);
+
+    try {
+        const response = await fetch(`${baseUrl}v2/accept/payment`, {
+            method: 'POST',
+            headers: {
+                "Content-Type": "application/json",
+                "X-VERIFY": hash
+            },
+            body: JSON.stringify({ request: base64Data })
+        });
+
+        const resData = await response.json();
+        if (resData.redirect_url) {
+            return {
+                status: 'success',
+                data: {
+                    paymentLink: resData.redirect_url,
+                    token: resData.token
+                }
+            };
+        }
+        throw new Error(resData.response_message || "Pine Labs Error");
+    } catch (e) {
+        throw new Error(`Pine Labs Exception: ${e.message}`);
+    }
 };
 
 const verifyPayment = async (userId, data) => {
@@ -357,74 +452,24 @@ const verifyPayment = async (userId, data) => {
         const enkashStatus = data.status || data.transactionStatus || data.orderStatus;
         isSuccessful = (enkashStatus === 'SUCCESS' || enkashStatus === 'PAID');
     } else if (transaction.paymentGateway === 'VEGAAH' || transaction.paymentGateway === 'vegaah') {
-        console.log("Vegaah callback received (masked)");
-
-        let decrypted = data;
-        // If data is encrypted (which it should be for Vegaah)
-        if (data.encData) {
-            decrypted = decryptVegaah(data.encData);
-        } else if (data.data && typeof data.data === 'string') {
-            // Fallback for previous implementation compatibility? Or just strict adherence to new plan?
-            // The new plan says we receive `encData` in the callback route. 
-            // But `map vegapay` might not be standard.
-            // Let's assume the callback sends `encData` as query/body.
-            // The services.js `verifyPayment` receives `data`.
-            try {
-                decrypted = decryptVegaahResponse(data.data, PAYMENT_CONFIG.vegaah.merchantKey);
-            } catch (err) {
-                // ignore or handle
-            }
-        }
-
-        // Logic from Plan Step 6
-        // NOTE: The transaction finding logic is at the top of verifyPayment (lines 418-424).
-        // It looks for `txnid` or `order_id` or `transactionId`.
-        // The decrypted payload needs to have one of these for the lookup to work BEFORE we get here.
-        // Wait, `verifyPayment` is called from `routes.js`: `verifyPayment(null, data)`.
-        // `data` comes from `req.body` or `req.query`.
-        // If the callback from Vegaah is just `encData`, we haven't decrypted it yet to get the orderId.
-
-        // This means `routes.js` must decrypt it FIRST to get the orderId to pass to verifyPayment? 
-        // OR verifyPayment needs to handle "finding the transaction" differently for Vegaah.
-
-        // Plan Step 5 says:
-        /*
-        if (data.gateway === "VEGAAH") {
-            const decrypted = decryptVegaah(data.encData);
-            if (decrypted.paymentStatus === "SUCCESS") {
-                await verifyPayment(null, decrypted);
-                ...
-            }
-        }
-        */
-        // So `verifyPayment` receives the DECRYPTED data.
-
-        // Logic requested for verifyPayment (Step 6):
-        /*
-        if (gateway === "VEGAAH") {
-          const txn = await Transaction.findOne({ orderId });
-          if (!txn) throw new Error("Transaction not found");
-          txn.status = "SUCCESS";
-          txn.gatewayResponse = data;
-          await txn.save();
-        }
-        */
-
-        // The current `verifyPayment` logic (lines 415-424) assumes it can find the transaction at the start.
-        // If `routes.js` passes the decrypted data, then `data` has `orderId`.
-        // So `Transaction.findOne` at the top of `verifyPayment` should work if `orderId` is in `data`.
-
-        // So here I just need to update the status logic.
-
         if (data.paymentStatus === 'SUCCESS') {
             isSuccessful = true;
         } else {
             isSuccessful = false;
         }
+    } else if (transaction.paymentGateway === 'PINELABS') {
+        const { secret } = PAYMENT_CONFIG.pinelabs;
 
-        // `verifyPayment` at line 487 handles the saving if `isSuccessful` is true.
-        // So I just need to set `isSuccessful`.
+        // Exclude dia_secret and dia_secret_type from verification
+        const { ppc_DIA_SECRET, ppc_DIA_SECRET_TYPE, gateway, ...verifyData } = data;
 
+        const isValid = verifyPineLabsHash(verifyData, ppc_DIA_SECRET, secret);
+        if (!isValid) {
+            console.error("[Pine Labs] Hash verification failed");
+            throw new Error("Invalid signature from payment gateway");
+        }
+
+        isSuccessful = (data.ppc_Parent_TxnStatus === '4' && data.ppc_ParentTxnResponseCode === '1');
     } else {
         isSuccessful = data.status === 'success' || data.txStatus === 'SUCCESS' || data.order_status === 'PAID' || data.result === 'success';
     }
