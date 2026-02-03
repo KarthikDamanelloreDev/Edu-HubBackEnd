@@ -1,6 +1,7 @@
 const Transaction = require('../transactions/schema');
 const Cart = require('../cart/schema');
 const crypto = require('crypto');
+require('dotenv').config();
 const { encryptVegaah, decryptVegaah } = require('./utils/vegaahCrypto');
 const { generateVegaahSignature } = require('./utils/vegaahSignature');
 
@@ -49,21 +50,39 @@ const PAYMENT_CONFIG = {
  * Generate Pine Labs Hash for X-VERIFY
  */
 const generatePineLabsHash = (request, secret) => {
-    return crypto.createHmac("sha256", Buffer.from(secret, 'hex')).update(request).digest("hex").toUpperCase();
+    if (!secret) {
+        throw new Error("Pine Labs Secret is missing in configuration. Please check your .env file and restart the server.");
+    }
+    try {
+        return crypto.createHmac("sha256", Buffer.from(secret, 'hex')).update(request).digest("hex").toUpperCase();
+    } catch (e) {
+        // Fallback if secret is not valid hex
+        return crypto.createHmac("sha256", Buffer.from(secret)).update(request).digest("hex").toUpperCase();
+    }
 };
 
 /**
  * Verify Pine Labs Hash for Callback
  */
 const verifyPineLabsHash = (request, hash, secret) => {
+    if (!secret || !hash) return false;
     const sortedKeys = Object.keys(request).sort();
     const dataString = sortedKeys
         .map((key) => `${key}=${request[key]}`)
         .join('&');
-    const newHash = crypto.createHmac('sha256', Buffer.from(secret, 'hex'))
-        .update(dataString)
-        .digest('hex')
-        .toUpperCase();
+
+    let newHash;
+    try {
+        newHash = crypto.createHmac('sha256', Buffer.from(secret, 'hex'))
+            .update(dataString)
+            .digest('hex')
+            .toUpperCase();
+    } catch (e) {
+        newHash = crypto.createHmac('sha256', Buffer.from(secret))
+            .update(dataString)
+            .digest('hex')
+            .toUpperCase();
+    }
     return newHash === hash;
 };
 
@@ -118,10 +137,23 @@ const initiateVegaahPayment = async (payload, userId, ipAddress) => {
     };
 };
 
+// Helper to determine base URLs for testing and production
+const getBaseUrls = () => {
+    // If running on localhost, use local URLs unless explicitly overridden
+    const isLocal = !process.env.NODE_ENV || process.env.NODE_ENV === 'development' || process.env.HOSTNAME?.includes('localhost');
+
+    return {
+        backend: process.env.BACKEND_API_URL || (isLocal ? 'http://localhost:5000/api' : 'https://edu-hubbackend.onrender.com/api'),
+        frontend: process.env.FRONTEND_URL || (isLocal ? 'http://localhost:5173' : 'https://eduhub.org.in')
+    };
+};
+
+const BASES = getBaseUrls();
+
 const REDIRECT_URLS = {
-    callback: process.env.BACKEND_API_URL ? `${process.env.BACKEND_API_URL}/payments/callback` : 'https://edu-hubbackend.onrender.com/api/payments/callback',
-    frontendSuccess: process.env.FRONTEND_URL ? `${process.env.FRONTEND_URL}/payment-status?status=success` : 'https://eduhub.org.in/payment-status?status=success',
-    frontendFailure: process.env.FRONTEND_URL ? `${process.env.FRONTEND_URL}/payment-status?status=failure` : 'https://eduhub.org.in/payment-status?status=failure'
+    callback: `${BASES.backend}/payments/callback`,
+    frontendSuccess: `${BASES.frontend}/payment-status?status=success`,
+    frontendFailure: `${BASES.frontend}/payment-status?status=failure`
 };
 
 const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
@@ -375,7 +407,8 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
 const initiatePineLabsPayment = async (userId, transactionId, amount, customerDetails) => {
     const { merchantId, accessCode, secret, baseUrl } = PAYMENT_CONFIG.pinelabs;
 
-    // Pine labs amount is in paisa
+    console.log("[Pine Labs] Config Debug:", { merchantId, accessCode, hasSecret: !!secret });
+
     const amountInPaisa = Math.round(amount * 100);
 
     const body = {
@@ -390,7 +423,7 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
         },
         txn_data: {
             navigation_mode: 2,
-            payment_mode: "1,3,4,10,11,14,16,17,19,20", // All common modes
+            payment_mode: "1,3,4,19,10,11,14,16,17",
             transaction_type: 1
         },
         customer_data: {
@@ -399,11 +432,28 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
             first_name: customerDetails.firstName,
             last_name: customerDetails.lastName || "User",
             mobile_no: customerDetails.phone,
-        }
+            billing_data: {
+                address1: "", address2: "", address3: "",
+                pincode: "", city: "", state: "", country: ""
+            },
+            shipping_data: {
+                first_name: "", last_name: "", mobile_no: "",
+                address1: "", address2: "", address3: "",
+                pincode: "", city: "", state: "", country: ""
+            }
+        },
+        udf_data: {
+            udf_field_1: "LOCAL_TESTING",
+            udf_field_2: transactionId,
+            udf_field_3: "", udf_field_4: "", udf_field_5: ""
+        },
+        product_details: []
     };
 
     const base64Data = Buffer.from(JSON.stringify(body)).toString("base64");
     const hash = generatePineLabsHash(base64Data, secret);
+
+    console.log("[Pine Labs] Request Body:", JSON.stringify(body));
 
     try {
         const response = await fetch(`${baseUrl}v2/accept/payment`, {
@@ -415,7 +465,18 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
             body: JSON.stringify({ request: base64Data })
         });
 
-        const resData = await response.json();
+        const status = response.status;
+        const text = await response.text();
+        console.log(`[Pine Labs] HTTP Status: ${status}`);
+        console.log(`[Pine Labs] Raw Response: ${text}`);
+
+        let resData;
+        try {
+            resData = JSON.parse(text);
+        } catch (e) {
+            throw new Error(`Invalid JSON response from Pine Labs (Status ${status}): ${text.slice(0, 100)}`);
+        }
+
         if (resData.redirect_url) {
             return {
                 status: 'success',
@@ -425,8 +486,9 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
                 }
             };
         }
-        throw new Error(resData.response_message || "Pine Labs Error");
+        throw new Error(resData.response_message || resData.message || `Pine Labs Error (Status ${status})`);
     } catch (e) {
+        console.error("[Pine Labs] Exception:", e);
         throw new Error(`Pine Labs Exception: ${e.message}`);
     }
 };
