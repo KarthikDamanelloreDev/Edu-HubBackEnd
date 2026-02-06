@@ -3,6 +3,11 @@ const Instructor = require('../instructors/schema');
 
 // Create a new course
 const createCourse = async (courseData) => {
+    // Generate unique ID if not provided
+    if (!courseData.id) {
+        courseData.id = `c-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    }
+
     // Generate slug from title if not provided
     if (!courseData.slug) {
         courseData.slug = courseData.title
