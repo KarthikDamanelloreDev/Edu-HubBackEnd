@@ -38,9 +38,9 @@ const PAYMENT_CONFIG = {
         merchantIp: process.env.VEGAAH_MERCHANT_IP || '127.0.0.1'
     },
     pinelabs: {
-        mid: process.env.PINELABS_MERCHANT_ID || '111077',
-        clientId: process.env.PINELABS_CLIENT_ID || '59194fe5-4c27-4e6e-8deb-4e59f8f4fd7b',
-        clientSecret: process.env.PINELABS_CLIENT_SECRET || '024dd66a367549b380bd322ff6c3b279',
+        mid: process.env.PINELABS_MERCHANT_ID || '356585',
+        clientId: process.env.PINELABS_CLIENT_ID || '25763cef-36c1-4fd0-9429-57a59ba0f4a7',
+        clientSecret: process.env.PINELABS_CLIENT_SECRET || '9dcad7de29444f4fa61ef65b7f31fea6',
         isUat: process.env.PINELABS_IS_UAT === 'true',
         authUrl: process.env.PINELABS_AUTH_URL || 'https://pluraluat.v2.pinepg.in/api/auth/v1/token',
         checkoutUrl: process.env.PINELABS_CHECKOUT_URL || 'https://pluraluat.v2.pinepg.in/api/checkout/v1/orders',
