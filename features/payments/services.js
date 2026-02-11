@@ -225,29 +225,65 @@ const REDIRECT_URLS = {
 const getPineLabsAccessToken = async () => {
     const config = PAYMENT_CONFIG.pinelabs;
 
+    console.log('='.repeat(80));
+    console.log('[Pine Labs Token] 🔑 GENERATING ACCESS TOKEN');
+    console.log('='.repeat(80));
+
+    const requestBody = {
+        client_id: config.clientId,
+        client_secret: config.clientSecret,
+        grant_type: 'client_credentials'
+    };
+
+    console.log('[Pine Labs Token] 📍 REQUEST URL:', config.authUrl);
+    console.log('[Pine Labs Token] 📤 REQUEST METHOD: POST');
+    console.log('[Pine Labs Token] 📋 REQUEST HEADERS:', JSON.stringify({
+        'Content-Type': 'application/json'
+    }, null, 2));
+    console.log('[Pine Labs Token] 📦 REQUEST BODY:', JSON.stringify({
+        client_id: config.clientId,
+        client_secret: '***' + config.clientSecret.slice(-4), // Masked for security
+        grant_type: 'client_credentials'
+    }, null, 2));
+    console.log('[Pine Labs Token] 🔐 Full Client Secret (last 10 chars):', '...' + config.clientSecret.slice(-10));
+
     try {
+        console.log('[Pine Labs Token] 🚀 Sending request to Pine Labs...');
+
         const tokenResp = await fetch(config.authUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                client_id: config.clientId,
-                client_secret: config.clientSecret,
-                grant_type: 'client_credentials'
-            })
+            body: JSON.stringify(requestBody)
         });
 
+        console.log('[Pine Labs Token] 📊 RESPONSE STATUS:', tokenResp.status, tokenResp.statusText);
+        console.log('[Pine Labs Token] 📥 RESPONSE HEADERS:', JSON.stringify(Object.fromEntries(tokenResp.headers.entries()), null, 2));
+
         const tokenData = await tokenResp.json();
+
+        console.log('[Pine Labs Token] 📦 RESPONSE BODY:', JSON.stringify(tokenData, null, 2));
+        console.log('='.repeat(80));
+
         const accessToken = tokenData.access_token;
 
         if (!accessToken) {
-            console.error("[Pine Labs Token] Error:", JSON.stringify(tokenData));
+            console.error("[Pine Labs Token] ❌ AUTHENTICATION FAILED!");
+            console.error("[Pine Labs Token] ❌ Error Details:", JSON.stringify(tokenData, null, 2));
+            console.error('='.repeat(80));
             throw new Error(tokenData.error_description || tokenData.message || "Authentication Failed with Pine Labs");
         }
 
-        console.log("[Pine Labs Token] Access token generated successfully");
+        console.log("[Pine Labs Token] ✅ Access token generated successfully");
+        console.log("[Pine Labs Token] 🎫 Token (first 20 chars):", accessToken.substring(0, 20) + '...');
+        console.log('='.repeat(80));
+
         return accessToken;
     } catch (e) {
-        console.error("[Pine Labs Token] Exception:", e.message);
+        console.error('='.repeat(80));
+        console.error("[Pine Labs Token] ❌ EXCEPTION OCCURRED!");
+        console.error("[Pine Labs Token] ❌ Error Message:", e.message);
+        console.error("[Pine Labs Token] ❌ Error Stack:", e.stack);
+        console.error('='.repeat(80));
         throw e;
     }
 };
