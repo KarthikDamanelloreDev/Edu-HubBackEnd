@@ -501,10 +501,17 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
         const status = response.status;
         const text = await response.text();
 
+        console.log(`[Pine Labs Result] HTTP ${status}`);
+
         let resData;
         try {
             resData = JSON.parse(text);
+            console.log(`[Pine Labs Result] Payload:`, JSON.stringify(resData));
         } catch (e) {
+            // If text is "IP Access Denied", it will fail parsing
+            if (text.includes("IP Access Denied") || status === 403) {
+                throw new Error("SERVER IP NOT WHITELISTED. Please add your server IP to Pine Labs Dashboard.");
+            }
             throw new Error(`Pine Labs API Error (HTTP ${status}): ${text.substring(0, 100)}`);
         }
 
@@ -518,7 +525,8 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
             };
         }
 
-        throw new Error(resData.response_message || resData.message || "Could not generate payment URL");
+        const errMsg = resData.response_message || resData.message || (resData.response_code ? `Error Code: ${resData.response_code}` : "Could not generate payment URL");
+        throw new Error(errMsg);
     } catch (e) {
         console.error("[Pine Labs] Exception:", e.message);
         throw new Error(`Pine Labs Integration: ${e.message}`);
