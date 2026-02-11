@@ -301,7 +301,8 @@ const getPineLabsOrderStatus = async (orderId) => {
 const initiatePineLabsPayment = async (userId, transactionId, amount, customerDetails, items = []) => {
     const config = PAYMENT_CONFIG.pinelabs;
 
-    console.log(`[Pine Labs] Starting Hosted Checkout for ${transactionId}, Amount: ${amount}`);
+
+    console.log(`[Pine Labs] Starting Hosted Checkout for ${transactionId}, Amount: ₹${amount} (${amount * 100} paise)`);
 
     try {
         // 1. Get Access Token (using reusable function)
@@ -314,7 +315,9 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
         const orderBody = {
             merchant_order_reference: transactionId,
             order_amount: {
-                value: amount, // Rupees as per user's working example
+                // IMPORTANT: Pine Labs expects amount in PAISE (smallest currency unit)
+                // ₹10 = 1000 paise, ₹100 = 10000 paise
+                value: Math.round(amount * 100), // Convert rupees to paise
                 currency: "INR"
             },
             integration_mode: "REDIRECT",
@@ -330,20 +333,20 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
                     mobile_number: customerDetails.phone || "9876543210",
                     billing_address: {
                         address1: customerDetails.address || "10 Downing Street Westminster London",
-                        address2: "Oxford Street Westminster London",
-                        address3: "Baker Street Westminster London",
+                        address2: "",
+                        address3: "",
                         pincode: customerDetails.zip || "51524036",
-                        city: customerDetails.city || "Westminster",
-                        state: customerDetails.state || "Westminster",
+                        city: customerDetails.city || "",
+                        state: customerDetails.state || "",
                         country: customerDetails.country || "London"
                     },
                     shipping_address: {
                         address1: customerDetails.address || "10 Downing Street Westminster London",
-                        address2: "Oxford Street Westminster London",
-                        address3: "Baker Street Westminster London",
+                        address2: "",
+                        address3: "",
                         pincode: customerDetails.zip || "51524036",
-                        city: customerDetails.city || "Westminster",
-                        state: customerDetails.state || "Westminster",
+                        city: customerDetails.city || "",
+                        state: customerDetails.state || "",
                         country: customerDetails.country || "London"
                     }
                 },
