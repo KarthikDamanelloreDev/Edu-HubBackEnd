@@ -38,13 +38,12 @@ const PAYMENT_CONFIG = {
         merchantIp: process.env.VEGAAH_MERCHANT_IP || '127.0.0.1'
     },
     pinelabs: {
-        // Hardcoded UAT Credentials for Demo/UAT
-        mid: '111077',
-        clientId: '59194fe5-4c27-4e6e-8deb-4e59f8f4fd7b',
-        clientSecret: '024dd66a367549b380bd322ff6c3b279',
-        isUat: true,
-        authUrl: 'https://pluraluat.v2.pinepg.in/api/auth/v1/token',
-        checkoutUrl: 'https://pluraluat.v2.pinepg.in/api/checkout/v1/orders'
+        mid: process.env.PINELABS_MERCHANT_ID || '111077',
+        clientId: process.env.PINELABS_CLIENT_ID || '59194fe5-4c27-4e6e-8deb-4e59f8f4fd7b',
+        clientSecret: process.env.PINELABS_CLIENT_SECRET || '024dd66a367549b380bd322ff6c3b279',
+        isUat: process.env.PINELABS_IS_UAT === 'true',
+        authUrl: process.env.PINELABS_AUTH_URL || 'https://pluraluat.v2.pinepg.in/api/auth/v1/token',
+        checkoutUrl: process.env.PINELABS_CHECKOUT_URL || 'https://pluraluat.v2.pinepg.in/api/checkout/v1/orders'
     }
 };
 
@@ -235,7 +234,8 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
             },
             integration_mode: "REDIRECT",
             pre_auth: false,
-            callback_url: `${REDIRECT_URLS.callback}?gateway=PINELABS`,
+            // IMPORTANT: Pine Labs cannot reach localhost, so always use production backend URL for callback
+            callback_url: `${process.env.BACKEND_API_URL || 'https://edu-hubbackend.onrender.com/api'}/payments/callback?gateway=PINELABS`,
             purchase_details: {
                 customer: {
                     email_id: customerDetails.email || "kevin.bob@example.com",
@@ -269,6 +269,9 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
             }
         };
 
+        console.log("[Pine Labs Order] Request Body:", JSON.stringify(orderBody, null, 2));
+        console.log("[Pine Labs Order] Callback URL:", orderBody.callback_url);
+
         // 3. Create Order
         const orderResp = await fetch(config.checkoutUrl, {
             method: 'POST',
@@ -282,7 +285,8 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
         });
 
         const orderData = await orderResp.json();
-        console.log("[Pine Labs Order] Result:", JSON.stringify(orderData));
+        console.log("[Pine Labs Order] HTTP Status:", orderResp.status);
+        console.log("[Pine Labs Order] Response:", JSON.stringify(orderData, null, 2));
 
         if (orderData.response_code === 200 && orderData.redirect_url) {
             return {
