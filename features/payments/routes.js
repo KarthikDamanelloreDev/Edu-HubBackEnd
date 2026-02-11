@@ -51,7 +51,9 @@ router.all('/callback', async (req, res) => {
         if (data.gateway === 'PINELABS') {
             try {
                 const result = await verifyPayment(null, data);
-                const transactionId = data.ppc_UniqueMerchantTxnID;
+                // Extract ID carefully for the new V3 (Plural) or V2 integration
+                const transactionId = data.merchant_order_reference || data.ppc_UniqueMerchantTxnID || data.order_id;
+
                 if (result.status === 'success') {
                     return res.redirect(`${REDIRECT_URLS.frontendSuccess}&transactionId=${transactionId}`);
                 }

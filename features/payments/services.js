@@ -38,11 +38,13 @@ const PAYMENT_CONFIG = {
         merchantIp: process.env.VEGAAH_MERCHANT_IP || '127.0.0.1'
     },
     pinelabs: {
-        merchantId: process.env.PINELABS_MERCHANT_ID,
-        accessCode: process.env.PINELABS_ACCESS_CODE,
-        secret: process.env.PINELABS_SECRET,
-        isTest: process.env.PINELABS_IS_TEST === 'true',
-        baseUrl: (process.env.PINELABS_IS_TEST === 'true') ? "https://uat.pinepg.in/api/" : 'https://pinepg.in/api/'
+        // Hardcoded UAT Credentials for Demo/UAT
+        mid: '111077',
+        clientId: '59194fe5-4c27-4e6e-8deb-4e59f8f4fd7b',
+        clientSecret: '024dd66a367549b380bd322ff6c3b279',
+        isUat: true,
+        authUrl: 'https://pluraluat.v2.pinepg.in/api/auth/v1/token',
+        checkoutUrl: 'https://pluraluat.v2.pinepg.in/api/checkout/v1/orders'
     }
 };
 
@@ -190,6 +192,116 @@ const REDIRECT_URLS = {
     callback: `${BASES.backend}/payments/callback`,
     frontendSuccess: `${BASES.frontend}/payment-status?status=success`,
     frontendFailure: `${BASES.frontend}/payment-status?status=failure`
+};
+
+/**
+ * Initiate Pine Labs Plural Hosted Checkout (V3)
+ * Following working example: https://developer.pinelabsonline.com/reference/hosted-checkout-create
+ */
+const initiatePineLabsPayment = async (userId, transactionId, amount, customerDetails, items = []) => {
+    const config = PAYMENT_CONFIG.pinelabs;
+
+    console.log(`[Pine Labs] Starting Hosted Checkout for ${transactionId}, Amount: ${amount}`);
+
+    try {
+        // 1. Get Access Token
+        const tokenResp = await fetch(config.authUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                client_id: config.clientId,
+                client_secret: config.clientSecret,
+                grant_type: 'client_credentials'
+            })
+        });
+
+        const tokenData = await tokenResp.json();
+        const accessToken = tokenData.access_token;
+
+        if (!accessToken) {
+            console.error("[Pine Labs Token] Error:", JSON.stringify(tokenData));
+            throw new Error(tokenData.error_description || tokenData.message || "Authentication Failed with Pine Labs");
+        }
+
+        // 2. Prepare Order Payload (Standard Plural V3 structure)
+        const timestamp = new Date().toISOString();
+        const requestId = crypto.randomUUID ? crypto.randomUUID() : `REQ-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+        const orderBody = {
+            merchant_order_reference: transactionId,
+            order_amount: {
+                value: amount, // Rupees as per user's working example
+                currency: "INR"
+            },
+            integration_mode: "REDIRECT",
+            pre_auth: false,
+            callback_url: `${REDIRECT_URLS.callback}?gateway=PINELABS`,
+            purchase_details: {
+                customer: {
+                    email_id: customerDetails.email || "kevin.bob@example.com",
+                    first_name: customerDetails.firstName || "Kevin",
+                    last_name: customerDetails.lastName || "Bob",
+                    customer_id: userId.toString(),
+                    mobile_number: customerDetails.phone || "9876543210",
+                    billing_address: {
+                        address1: customerDetails.address || "10 Downing Street Westminster London",
+                        address2: "Oxford Street Westminster London",
+                        address3: "Baker Street Westminster London",
+                        pincode: customerDetails.zip || "51524036",
+                        city: customerDetails.city || "Westminster",
+                        state: customerDetails.state || "Westminster",
+                        country: customerDetails.country || "London"
+                    },
+                    shipping_address: {
+                        address1: customerDetails.address || "10 Downing Street Westminster London",
+                        address2: "Oxford Street Westminster London",
+                        address3: "Baker Street Westminster London",
+                        pincode: customerDetails.zip || "51524036",
+                        city: customerDetails.city || "Westminster",
+                        state: customerDetails.state || "Westminster",
+                        country: customerDetails.country || "London"
+                    }
+                },
+                merchant_metadata: {
+                    key1: "DD",
+                    key2: "XOF"
+                }
+            }
+        };
+
+        // 3. Create Order
+        const orderResp = await fetch(config.checkoutUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${accessToken}`,
+                'Request-Timestamp': timestamp,
+                'Request-ID': requestId
+            },
+            body: JSON.stringify(orderBody)
+        });
+
+        const orderData = await orderResp.json();
+        console.log("[Pine Labs Order] Result:", JSON.stringify(orderData));
+
+        if (orderData.response_code === 200 && orderData.redirect_url) {
+            return {
+                status: 'success',
+                data: {
+                    paymentLink: orderData.redirect_url,
+                    orderId: orderData.order_id,
+                    token: orderData.token
+                }
+            };
+        }
+
+        const errorMsg = orderData.response_message || orderData.message || "Order Creation Failed";
+        throw new Error(errorMsg);
+
+    } catch (e) {
+        console.error("[Pine Labs] Integration Exception:", e.message);
+        throw new Error(`Pine Labs Error: ${e.message}`);
+    }
 };
 
 const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
@@ -437,101 +549,6 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
     throw new Error('Unsupported payment gateway');
 };
 
-/**
- * Initiate Pine Labs Payment
- */
-const initiatePineLabsPayment = async (userId, transactionId, amount, customerDetails, items = []) => {
-    const { merchantId, accessCode, secret, baseUrl } = PAYMENT_CONFIG.pinelabs;
-
-    console.log("[Pine Labs] Initiating payment for transaction:", transactionId);
-
-    const amountInPaisa = Math.round(amount * 100);
-
-    const body = {
-        merchant_data: {
-            merchant_id: merchantId,
-            merchant_access_code: accessCode,
-            unique_merchant_txn_id: transactionId,
-            merchant_return_url: `${REDIRECT_URLS.callback}?gateway=PINELABS`,
-        },
-        payment_data: {
-            amount_in_paisa: amountInPaisa.toString(),
-        },
-        txn_data: {
-            navigation_mode: 2,
-            payment_mode: "1,3,4,19,10,11,14,16,17", // Cards, Netbanking, EMI, UPI, Wallets, etc.
-            transaction_type: 1
-        },
-        customer_data: {
-            customer_id: userId.toString(),
-            email_id: customerDetails.email,
-            first_name: customerDetails.firstName,
-            last_name: customerDetails.lastName || "User",
-            mobile_no: customerDetails.phone,
-            billing_data: {
-                address1: "NA", address2: "NA", address3: "NA",
-                pincode: "NA", city: "NA", state: "NA", country: "India"
-            }
-        },
-        udf_data: {
-            udf_field_1: "EDU_PRO_PAYMENT",
-            udf_field_2: transactionId,
-            udf_field_3: userId.toString(),
-            udf_field_4: "", udf_field_5: ""
-        },
-        product_details: items.map(item => ({
-            product_code: (item.course?._id || item.course || "COURSE").toString().substring(0, 20),
-            product_amount: Math.round((item.course?.price || item.price || 0) * 100)
-        }))
-    };
-
-    const base64Data = Buffer.from(JSON.stringify(body)).toString("base64");
-    const hash = generatePineLabsHash(base64Data, secret);
-
-    try {
-        const response = await fetch(`${baseUrl}v2/accept/payment`, {
-            method: 'POST',
-            headers: {
-                "Content-Type": "application/json",
-                "X-VERIFY": hash
-            },
-            body: JSON.stringify({ request: base64Data })
-        });
-
-        const status = response.status;
-        const text = await response.text();
-
-        console.log(`[Pine Labs Result] HTTP ${status}`);
-
-        let resData;
-        try {
-            resData = JSON.parse(text);
-            console.log(`[Pine Labs Result] Payload:`, JSON.stringify(resData));
-        } catch (e) {
-            // If text is "IP Access Denied", it will fail parsing
-            if (text.includes("IP Access Denied") || status === 403) {
-                throw new Error("SERVER IP NOT WHITELISTED. Please add your server IP to Pine Labs Dashboard.");
-            }
-            throw new Error(`Pine Labs API Error (HTTP ${status}): ${text.substring(0, 100)}`);
-        }
-
-        if (resData.status === true || resData.redirect_url) {
-            return {
-                status: 'success',
-                data: {
-                    paymentLink: resData.redirect_url,
-                    token: resData.token
-                }
-            };
-        }
-
-        const errMsg = resData.response_message || resData.message || (resData.response_code ? `Error Code: ${resData.response_code}` : "Could not generate payment URL");
-        throw new Error(errMsg);
-    } catch (e) {
-        console.error("[Pine Labs] Exception:", e.message);
-        throw new Error(`Pine Labs Integration: ${e.message}`);
-    }
-};
 
 const verifyPayment = async (userId, data) => {
     console.log("[Payment Verify] Data received:", JSON.stringify(data));
@@ -560,32 +577,12 @@ const verifyPayment = async (userId, data) => {
             isSuccessful = false;
         }
     } else if (transaction.paymentGateway === 'PINELABS') {
-        const { secret } = PAYMENT_CONFIG.pinelabs;
+        const pineStatus = data.status || data.order_status || data.ppc_Parent_TxnStatus;
+        const responseCode = data.response_code || data.ppc_ParentTxnResponseCode;
 
-        // 1. Verify Hash from callback parameters
-        const { ppc_DIA_SECRET, ppc_DIA_SECRET_TYPE, gateway, ...verifyData } = data;
-        const isValid = verifyPineLabsHash(verifyData, ppc_DIA_SECRET, secret);
+        isSuccessful = (pineStatus === 'PAID' || pineStatus === 'SUCCESS' || pineStatus == '4' || responseCode == 200 || responseCode == 1);
 
-        if (!isValid) {
-            console.error("[Pine Labs] Callback hash verification failed");
-            // We still proceed to Fetch Inquiry as a second layer of security
-        }
-
-        // 2. Secondary Verification via Fetch Order API (Inquiry)
-        const fetchDetails = await fetchPineLabsOrder(transactionId);
-        console.log("[Pine Labs] Inquiry Result:", JSON.stringify(fetchDetails));
-
-        if (fetchDetails) {
-            // Check success conditions from Inquiry API
-            // ppc_Parent_TxnStatus 4 = Success, ppc_ParentTxnResponseCode 1 = Success
-            isSuccessful = (fetchDetails.ppc_Parent_TxnStatus == '4' && fetchDetails.ppc_ParentTxnResponseCode == '1');
-
-            // Merge inquiry details into data for full record
-            Object.assign(data, fetchDetails);
-        } else {
-            // Fallback to callback data if inquiry fails
-            isSuccessful = (data.ppc_Parent_TxnStatus == '4' && data.ppc_ParentTxnResponseCode == '1');
-        }
+        console.log(`[Pine Labs Verify] ID: ${transactionId}, Status: ${pineStatus}, Success: ${isSuccessful}`);
     } else {
         isSuccessful = data.status === 'success' || data.txStatus === 'SUCCESS' || data.order_status === 'PAID' || data.result === 'success';
     }
