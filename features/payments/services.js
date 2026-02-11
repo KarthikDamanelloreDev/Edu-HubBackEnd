@@ -43,7 +43,8 @@ const PAYMENT_CONFIG = {
         clientSecret: process.env.PINELABS_CLIENT_SECRET || '024dd66a367549b380bd322ff6c3b279',
         isUat: process.env.PINELABS_IS_UAT === 'true',
         authUrl: process.env.PINELABS_AUTH_URL || 'https://pluraluat.v2.pinepg.in/api/auth/v1/token',
-        checkoutUrl: process.env.PINELABS_CHECKOUT_URL || 'https://pluraluat.v2.pinepg.in/api/checkout/v1/orders'
+        checkoutUrl: process.env.PINELABS_CHECKOUT_URL || 'https://pluraluat.v2.pinepg.in/api/checkout/v1/orders',
+        getOrderUrl: process.env.PINELABS_GET_ORDER_URL || 'https://pluraluat.v2.pinepg.in/api/pay/v1/orders'
     }
 };
 
@@ -187,6 +188,7 @@ const getBaseUrls = () => {
 
 const BASES = getBaseUrls();
 
+
 const REDIRECT_URLS = {
     callback: `${BASES.backend}/payments/callback`,
     frontendSuccess: `${BASES.frontend}/payment-status?status=success`,
@@ -194,16 +196,13 @@ const REDIRECT_URLS = {
 };
 
 /**
- * Initiate Pine Labs Plural Hosted Checkout (V3)
- * Following working example: https://developer.pinelabsonline.com/reference/hosted-checkout-create
+ * Generate Access Token for Pine Labs API calls
+ * Reusable function for all Pine Labs API requests
  */
-const initiatePineLabsPayment = async (userId, transactionId, amount, customerDetails, items = []) => {
+const getPineLabsAccessToken = async () => {
     const config = PAYMENT_CONFIG.pinelabs;
 
-    console.log(`[Pine Labs] Starting Hosted Checkout for ${transactionId}, Amount: ${amount}`);
-
     try {
-        // 1. Get Access Token
         const tokenResp = await fetch(config.authUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -221,6 +220,92 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
             console.error("[Pine Labs Token] Error:", JSON.stringify(tokenData));
             throw new Error(tokenData.error_description || tokenData.message || "Authentication Failed with Pine Labs");
         }
+
+        console.log("[Pine Labs Token] Access token generated successfully");
+        return accessToken;
+    } catch (e) {
+        console.error("[Pine Labs Token] Exception:", e.message);
+        throw e;
+    }
+};
+
+/**
+ * Get Order Status from Pine Labs (Server-Side Verification)
+ * API: GET /api/pay/v1/orders/{order_id}
+ * This is the RECOMMENDED way to verify payment status
+ * 
+ * @param {string} orderId - Pine Labs order_id (e.g., "v1-260211140955-aa-6HCITZ")
+ * @returns {Promise<Object>} Order details with payment status
+ */
+const getPineLabsOrderStatus = async (orderId) => {
+    const config = PAYMENT_CONFIG.pinelabs;
+
+    console.log(`[Pine Labs Get Order] Fetching status for order: ${orderId}`);
+
+    try {
+        // 1. Get Access Token
+        const accessToken = await getPineLabsAccessToken();
+
+        // 2. Prepare headers
+        const timestamp = new Date().toISOString();
+        const requestId = crypto.randomUUID ? crypto.randomUUID() : `REQ-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+        // 3. Call Get Order API
+        const orderUrl = `${config.getOrderUrl}/${orderId}`;
+        console.log(`[Pine Labs Get Order] Calling: ${orderUrl}`);
+
+        const orderResp = await fetch(orderUrl, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${accessToken}`,
+                'Request-Timestamp': timestamp,
+                'Request-ID': requestId
+            }
+        });
+
+        const orderData = await orderResp.json();
+        console.log("[Pine Labs Get Order] HTTP Status:", orderResp.status);
+        console.log("[Pine Labs Get Order] Response:", JSON.stringify(orderData, null, 2));
+
+        if (orderResp.status === 200 && orderData) {
+            return {
+                success: true,
+                data: orderData
+            };
+        }
+
+        // Handle error responses
+        const errorMsg = orderData.error_message || orderData.message || "Failed to fetch order status";
+        console.error("[Pine Labs Get Order] Error:", errorMsg);
+
+        return {
+            success: false,
+            error: errorMsg,
+            data: orderData
+        };
+
+    } catch (e) {
+        console.error("[Pine Labs Get Order] Exception:", e.message);
+        return {
+            success: false,
+            error: e.message
+        };
+    }
+};
+
+/**
+ * Initiate Pine Labs Plural Hosted Checkout (V3)
+ * Following working example: https://developer.pinelabsonline.com/reference/hosted-checkout-create
+ */
+const initiatePineLabsPayment = async (userId, transactionId, amount, customerDetails, items = []) => {
+    const config = PAYMENT_CONFIG.pinelabs;
+
+    console.log(`[Pine Labs] Starting Hosted Checkout for ${transactionId}, Amount: ${amount}`);
+
+    try {
+        // 1. Get Access Token (using reusable function)
+        const accessToken = await getPineLabsAccessToken();
 
         // 2. Prepare Order Payload (Standard Plural V3 structure)
         const timestamp = new Date().toISOString();
@@ -580,13 +665,115 @@ const verifyPayment = async (userId, data) => {
         } else {
             isSuccessful = false;
         }
-    } else if (transaction.paymentGateway === 'PINELABS') {
-        const pineStatus = data.status || data.order_status || data.ppc_Parent_TxnStatus;
-        const responseCode = data.response_code || data.ppc_ParentTxnResponseCode;
+    } else if (transaction.paymentGateway === 'PINELABS' || transaction.paymentGateway === 'pinelabs') {
+        console.log('[Pine Labs Verify] Raw callback data:', JSON.stringify(data, null, 2));
 
-        isSuccessful = (pineStatus === 'PAID' || pineStatus === 'SUCCESS' || pineStatus == '4' || responseCode == 200 || responseCode == 1);
+        // BEST PRACTICE: Verify payment status directly from Pine Labs servers
+        // This is more secure than trusting callback data alone
 
-        console.log(`[Pine Labs Verify] ID: ${transactionId}, Status: ${pineStatus}, Success: ${isSuccessful}`);
+        // Extract Pine Labs order_id from callback data
+        const pineLabsOrderId = data.order_id || data.orderId || (data.order && data.order.order_id);
+
+        if (pineLabsOrderId) {
+            console.log(`[Pine Labs Verify] Found Pine Labs order_id: ${pineLabsOrderId}`);
+            console.log('[Pine Labs Verify] Fetching order status from Pine Labs API...');
+
+            // Call Get Order API to verify status directly from Pine Labs
+            const orderStatusResult = await getPineLabsOrderStatus(pineLabsOrderId);
+
+            if (orderStatusResult.success && orderStatusResult.data) {
+                const orderData = orderStatusResult.data;
+                console.log('[Pine Labs Verify] Server-side verification successful');
+
+                // Extract status from API response
+                const apiOrderStatus = orderData.order_status || orderData.status || (orderData.order && orderData.order.status);
+                const apiPaymentStatus = orderData.payment_status || (orderData.payment && orderData.payment.status);
+                const apiTransactionStatus = orderData.transaction_status;
+
+                console.log('[Pine Labs Verify] API Response Statuses:', {
+                    apiOrderStatus,
+                    apiPaymentStatus,
+                    apiTransactionStatus
+                });
+
+                // Verify using API response (most reliable)
+                isSuccessful = (
+                    apiOrderStatus === 'PAID' ||
+                    apiOrderStatus === 'CHARGED' ||
+                    apiOrderStatus === 'PROCESSED' ||
+                    apiOrderStatus === 'SUCCESS' ||
+                    apiPaymentStatus === 'CAPTURED' ||
+                    apiPaymentStatus === 'SUCCESS' ||
+                    apiTransactionStatus === 'SUCCESS'
+                );
+
+                console.log(`[Pine Labs Verify] Server-side verification result: ${isSuccessful}`);
+
+                // Store the complete API response for reference
+                data.pineLabsApiResponse = orderData;
+            } else {
+                console.warn('[Pine Labs Verify] Server-side verification failed, falling back to callback data');
+                console.warn('[Pine Labs Verify] Error:', orderStatusResult.error);
+
+                // Fallback: Use callback data if API call fails
+                const orderStatus = data.order_status || data.orderStatus || (data.order && data.order.status);
+                const paymentStatus = data.payment_status || data.paymentStatus || (data.payment && data.payment.status);
+                const transactionStatus = data.transaction_status || data.transactionStatus;
+                const responseCode = data.response_code || data.responseCode;
+                const status = data.status;
+
+                console.log('[Pine Labs Verify] Callback data statuses:', {
+                    orderStatus,
+                    paymentStatus,
+                    transactionStatus,
+                    responseCode,
+                    status
+                });
+
+                isSuccessful = (
+                    orderStatus === 'PAID' ||
+                    orderStatus === 'CHARGED' ||
+                    orderStatus === 'SUCCESS' ||
+                    paymentStatus === 'CAPTURED' ||
+                    paymentStatus === 'SUCCESS' ||
+                    transactionStatus === 'SUCCESS' ||
+                    status === 'SUCCESS' ||
+                    responseCode === 200 ||
+                    responseCode === '200'
+                );
+            }
+        } else {
+            console.warn('[Pine Labs Verify] No Pine Labs order_id found in callback, using callback data only');
+
+            // Fallback: Use callback data when order_id is not available
+            const orderStatus = data.order_status || data.orderStatus || (data.order && data.order.status);
+            const paymentStatus = data.payment_status || data.paymentStatus || (data.payment && data.payment.status);
+            const transactionStatus = data.transaction_status || data.transactionStatus;
+            const responseCode = data.response_code || data.responseCode;
+            const status = data.status;
+
+            console.log('[Pine Labs Verify] Callback data statuses:', {
+                orderStatus,
+                paymentStatus,
+                transactionStatus,
+                responseCode,
+                status
+            });
+
+            isSuccessful = (
+                orderStatus === 'PAID' ||
+                orderStatus === 'CHARGED' ||
+                orderStatus === 'SUCCESS' ||
+                paymentStatus === 'CAPTURED' ||
+                paymentStatus === 'SUCCESS' ||
+                transactionStatus === 'SUCCESS' ||
+                status === 'SUCCESS' ||
+                responseCode === 200 ||
+                responseCode === '200'
+            );
+        }
+
+        console.log(`[Pine Labs Verify] Final verification result for ${transactionId}: ${isSuccessful}`);
     } else {
         isSuccessful = data.status === 'success' || data.txStatus === 'SUCCESS' || data.order_status === 'PAID' || data.result === 'success';
     }
@@ -608,4 +795,5 @@ const verifyPayment = async (userId, data) => {
     }
 };
 
-module.exports = { initiatePayment, verifyPayment, REDIRECT_URLS };
+
+module.exports = { initiatePayment, verifyPayment, getPineLabsOrderStatus, REDIRECT_URLS };

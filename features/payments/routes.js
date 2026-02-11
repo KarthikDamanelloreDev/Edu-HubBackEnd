@@ -48,18 +48,41 @@ router.all('/callback', async (req, res) => {
             }
         }
 
-        if (data.gateway === 'PINELABS') {
+
+        if (data.gateway === 'PINELABS' || data.gateway === 'pinelabs') {
             try {
+                console.log('[Pine Labs Callback] Received data:', JSON.stringify(data, null, 2));
+
+                // Pine Labs can send callbacks in different formats:
+                // 1. URL redirect with query params
+                // 2. Webhook POST with JSON body
+
+                // Extract transaction ID from various possible fields
+                const transactionId = data.merchant_order_reference
+                    || data.ppc_UniqueMerchantTxnID
+                    || data.order_id
+                    || data.orderId;
+
+                console.log('[Pine Labs Callback] Transaction ID:', transactionId);
+
+                if (!transactionId) {
+                    console.error('[Pine Labs Callback] No transaction ID found in callback data');
+                    return res.redirect(`${REDIRECT_URLS.frontendFailure}&message=Invalid callback data`);
+                }
+
+                // Verify payment status
                 const result = await verifyPayment(null, data);
-                // Extract ID carefully for the new V3 (Plural) or V2 integration
-                const transactionId = data.merchant_order_reference || data.ppc_UniqueMerchantTxnID || data.order_id;
 
                 if (result.status === 'success') {
+                    console.log('[Pine Labs Callback] Payment successful, redirecting to success page');
                     return res.redirect(`${REDIRECT_URLS.frontendSuccess}&transactionId=${transactionId}`);
                 }
-                return res.redirect(`${REDIRECT_URLS.frontendFailure}&message=Payment failed`);
+
+                console.log('[Pine Labs Callback] Payment failed or pending');
+                return res.redirect(`${REDIRECT_URLS.frontendFailure}&message=Payment failed&transactionId=${transactionId}`);
             } catch (e) {
-                console.error("Pine Labs Callback Error", e);
+                console.error('[Pine Labs Callback] Error:', e.message);
+                console.error('[Pine Labs Callback] Stack:', e.stack);
                 return res.redirect(`${REDIRECT_URLS.frontendFailure}&message=${encodeURIComponent(e.message)}`);
             }
         }
