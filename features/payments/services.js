@@ -38,46 +38,34 @@ const PAYMENT_CONFIG = {
         merchantIp: process.env.VEGAAH_MERCHANT_IP || '127.0.0.1'
     },
     pinelabs: (() => {
-        // Smart environment detection based on backend URL
-        // No need for NODE_ENV variable!
+        // IMPORTANT: Current credentials (356585) are UAT credentials
+        // They MUST use UAT URLs, not production URLs
+        // When you get real production credentials, update this logic
+
         const backendUrl = process.env.BACKEND_API_URL || '';
-        const isProduction = backendUrl.includes('edu-hubbackend.onrender.com') ||
+        const isProductionServer = backendUrl.includes('edu-hubbackend.onrender.com') ||
             backendUrl.includes('eduhub.org.in');
 
-        const environment = isProduction ? 'PRODUCTION' : 'UAT';
-
-        // Production credentials (Merchant ID: 356585)
-        const prodConfig = {
+        // UAT Credentials (Merchant ID: 356585)
+        // These work with UAT URLs only
+        const config = {
             mid: '356585',
             clientId: '25763cef-36c1-4fd0-9429-57a59ba0f4a7',
             clientSecret: '9dcad7de29444f4fa61ef65b7f31fea6',
-            authUrl: 'https://api.pluralpay.in/api/auth/v1/token',
-            checkoutUrl: 'https://api.pluralpay.in/api/checkout/v1/orders',
-            getOrderUrl: 'https://api.pluralpay.in/api/pay/v1/orders'
-        };
-
-        // UAT credentials (for localhost testing)
-        const uatConfig = {
-            mid: '356585',
-            clientId: '25763cef-36c1-4fd0-9429-57a59ba0f4a7',
-            clientSecret: '9dcad7de29444f4fa61ef65b7f31fea6',
+            // MUST use UAT URLs because credentials are UAT credentials
             authUrl: 'https://pluraluat.v2.pinepg.in/api/auth/v1/token',
             checkoutUrl: 'https://pluraluat.v2.pinepg.in/api/checkout/v1/orders',
-            getOrderUrl: 'https://pluraluat.v2.pinepg.in/api/pay/v1/orders'
+            getOrderUrl: 'https://pluraluat.v2.pinepg.in/api/pay/v1/orders',
+            environment: 'UAT',
+            isProduction: false
         };
 
-        // Select config based on environment
-        const config = isProduction ? prodConfig : uatConfig;
-
-        // Add environment info
-        config.environment = environment;
-        config.isProduction = isProduction;
-
-        // Log which environment is active
-        console.log(`[Pine Labs Config] 🌍 Environment: ${environment}`);
+        // Log configuration
+        console.log(`[Pine Labs Config] 🌍 Environment: UAT (Using UAT credentials)`);
         console.log(`[Pine Labs Config] 🏢 Merchant ID: ${config.mid}`);
         console.log(`[Pine Labs Config] 🔗 Auth URL: ${config.authUrl}`);
-        console.log(`[Pine Labs Config] 📍 Backend URL: ${backendUrl || 'localhost'}`);
+        console.log(`[Pine Labs Config] 📍 Server: ${isProductionServer ? 'Production (Render)' : 'Localhost'}`);
+        console.log(`[Pine Labs Config] ⚠️  Note: Using UAT credentials - test cards only!`);
 
         return config;
     })()
