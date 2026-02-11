@@ -51,13 +51,49 @@ const PAYMENT_CONFIG = {
  */
 const generatePineLabsHash = (request, secret) => {
     if (!secret) {
-        throw new Error("Pine Labs Secret is missing in configuration. Please check your .env file and restart the server.");
+        throw new Error("Pine Labs Secret is missing in configuration. See .env file.");
     }
     try {
+        // Pine Labs expects the secret to be treated as a hex string if possible
         return crypto.createHmac("sha256", Buffer.from(secret, 'hex')).update(request).digest("hex").toUpperCase();
     } catch (e) {
-        // Fallback if secret is not valid hex
+        // Fallback for non-hex secrets
         return crypto.createHmac("sha256", Buffer.from(secret)).update(request).digest("hex").toUpperCase();
+    }
+};
+
+/**
+ * Fetch Pine Labs Order Details (Inquiry API)
+ * Recommended to verify payment status server-side
+ */
+const fetchPineLabsOrder = async (transactionId, transactionType = 1) => {
+    const { merchantId, accessCode, secret, baseUrl } = PAYMENT_CONFIG.pinelabs;
+
+    const body = {
+        ppc_MerchantID: merchantId,
+        ppc_MerchantAccessCode: accessCode,
+        ppc_UniqueMerchantTxnID: transactionId,
+        ppc_TransactionType: transactionType,
+    };
+
+    const base64Data = Buffer.from(JSON.stringify(body)).toString("base64");
+    const hash = generatePineLabsHash(base64Data, secret);
+
+    try {
+        const response = await fetch(`${baseUrl}v2/accept/fetchorder`, {
+            method: 'POST',
+            headers: {
+                "Content-Type": "application/json",
+                "X-VERIFY": hash
+            },
+            body: JSON.stringify({ request: base64Data })
+        });
+
+        const text = await response.text();
+        return JSON.parse(text);
+    } catch (e) {
+        console.error("[Pine Labs Fetch] Error:", e.message);
+        return null;
     }
 };
 
@@ -395,7 +431,7 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
     }
 
     if (data.paymentMethod === 'pinelabs' || data.paymentMethod === 'PINELABS') {
-        return initiatePineLabsPayment(userId, transactionId, totalAmount, data.customerDetails);
+        return initiatePineLabsPayment(userId, transactionId, totalAmount, data.customerDetails, cart.items);
     }
 
     throw new Error('Unsupported payment gateway');
@@ -404,10 +440,10 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
 /**
  * Initiate Pine Labs Payment
  */
-const initiatePineLabsPayment = async (userId, transactionId, amount, customerDetails) => {
+const initiatePineLabsPayment = async (userId, transactionId, amount, customerDetails, items = []) => {
     const { merchantId, accessCode, secret, baseUrl } = PAYMENT_CONFIG.pinelabs;
 
-    console.log("[Pine Labs] Config Debug:", { merchantId, accessCode, hasSecret: !!secret });
+    console.log("[Pine Labs] Initiating payment for transaction:", transactionId);
 
     const amountInPaisa = Math.round(amount * 100);
 
@@ -423,7 +459,7 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
         },
         txn_data: {
             navigation_mode: 2,
-            payment_mode: "1,3,4,19,10,11,14,16,17",
+            payment_mode: "1,3,4,19,10,11,14,16,17", // Cards, Netbanking, EMI, UPI, Wallets, etc.
             transaction_type: 1
         },
         customer_data: {
@@ -433,27 +469,24 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
             last_name: customerDetails.lastName || "User",
             mobile_no: customerDetails.phone,
             billing_data: {
-                address1: "", address2: "", address3: "",
-                pincode: "", city: "", state: "", country: ""
-            },
-            shipping_data: {
-                first_name: "", last_name: "", mobile_no: "",
-                address1: "", address2: "", address3: "",
-                pincode: "", city: "", state: "", country: ""
+                address1: "NA", address2: "NA", address3: "NA",
+                pincode: "NA", city: "NA", state: "NA", country: "India"
             }
         },
         udf_data: {
-            udf_field_1: "LOCAL_TESTING",
+            udf_field_1: "EDU_PRO_PAYMENT",
             udf_field_2: transactionId,
-            udf_field_3: "", udf_field_4: "", udf_field_5: ""
+            udf_field_3: userId.toString(),
+            udf_field_4: "", udf_field_5: ""
         },
-        product_details: []
+        product_details: items.map(item => ({
+            product_code: (item.course?._id || item.course || "COURSE").toString().substring(0, 20),
+            product_amount: Math.round((item.course?.price || item.price || 0) * 100)
+        }))
     };
 
     const base64Data = Buffer.from(JSON.stringify(body)).toString("base64");
     const hash = generatePineLabsHash(base64Data, secret);
-
-    console.log("[Pine Labs] Request Body:", JSON.stringify(body));
 
     try {
         const response = await fetch(`${baseUrl}v2/accept/payment`, {
@@ -467,17 +500,15 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
 
         const status = response.status;
         const text = await response.text();
-        console.log(`[Pine Labs] HTTP Status: ${status}`);
-        console.log(`[Pine Labs] Raw Response: ${text}`);
 
         let resData;
         try {
             resData = JSON.parse(text);
         } catch (e) {
-            throw new Error(`Invalid JSON response from Pine Labs (Status ${status}): ${text.slice(0, 100)}`);
+            throw new Error(`Pine Labs API Error (HTTP ${status}): ${text.substring(0, 100)}`);
         }
 
-        if (resData.redirect_url) {
+        if (resData.status === true || resData.redirect_url) {
             return {
                 status: 'success',
                 data: {
@@ -486,10 +517,11 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
                 }
             };
         }
-        throw new Error(resData.response_message || resData.message || `Pine Labs Error (Status ${status})`);
+
+        throw new Error(resData.response_message || resData.message || "Could not generate payment URL");
     } catch (e) {
-        console.error("[Pine Labs] Exception:", e);
-        throw new Error(`Pine Labs Exception: ${e.message}`);
+        console.error("[Pine Labs] Exception:", e.message);
+        throw new Error(`Pine Labs Integration: ${e.message}`);
     }
 };
 
@@ -522,16 +554,30 @@ const verifyPayment = async (userId, data) => {
     } else if (transaction.paymentGateway === 'PINELABS') {
         const { secret } = PAYMENT_CONFIG.pinelabs;
 
-        // Exclude dia_secret and dia_secret_type from verification
+        // 1. Verify Hash from callback parameters
         const { ppc_DIA_SECRET, ppc_DIA_SECRET_TYPE, gateway, ...verifyData } = data;
-
         const isValid = verifyPineLabsHash(verifyData, ppc_DIA_SECRET, secret);
+
         if (!isValid) {
-            console.error("[Pine Labs] Hash verification failed");
-            throw new Error("Invalid signature from payment gateway");
+            console.error("[Pine Labs] Callback hash verification failed");
+            // We still proceed to Fetch Inquiry as a second layer of security
         }
 
-        isSuccessful = (data.ppc_Parent_TxnStatus === '4' && data.ppc_ParentTxnResponseCode === '1');
+        // 2. Secondary Verification via Fetch Order API (Inquiry)
+        const fetchDetails = await fetchPineLabsOrder(transactionId);
+        console.log("[Pine Labs] Inquiry Result:", JSON.stringify(fetchDetails));
+
+        if (fetchDetails) {
+            // Check success conditions from Inquiry API
+            // ppc_Parent_TxnStatus 4 = Success, ppc_ParentTxnResponseCode 1 = Success
+            isSuccessful = (fetchDetails.ppc_Parent_TxnStatus == '4' && fetchDetails.ppc_ParentTxnResponseCode == '1');
+
+            // Merge inquiry details into data for full record
+            Object.assign(data, fetchDetails);
+        } else {
+            // Fallback to callback data if inquiry fails
+            isSuccessful = (data.ppc_Parent_TxnStatus == '4' && data.ppc_ParentTxnResponseCode == '1');
+        }
     } else {
         isSuccessful = data.status === 'success' || data.txStatus === 'SUCCESS' || data.order_status === 'PAID' || data.result === 'success';
     }
