@@ -37,15 +37,50 @@ const PAYMENT_CONFIG = {
         contextPath: process.env.VEGAAH_CONTEXT_PATH || 'CORE_2.2.2',
         merchantIp: process.env.VEGAAH_MERCHANT_IP || '127.0.0.1'
     },
-    pinelabs: {
-        mid: process.env.PINELABS_MERCHANT_ID || '356585',
-        clientId: process.env.PINELABS_CLIENT_ID || '25763cef-36c1-4fd0-9429-57a59ba0f4a7',
-        clientSecret: process.env.PINELABS_CLIENT_SECRET || '9dcad7de29444f4fa61ef65b7f31fea6',
-        isUat: process.env.PINELABS_IS_UAT === 'true',
-        authUrl: process.env.PINELABS_AUTH_URL || 'https://pluraluat.v2.pinepg.in/api/auth/v1/token',
-        checkoutUrl: process.env.PINELABS_CHECKOUT_URL || 'https://pluraluat.v2.pinepg.in/api/checkout/v1/orders',
-        getOrderUrl: process.env.PINELABS_GET_ORDER_URL || 'https://pluraluat.v2.pinepg.in/api/pay/v1/orders'
-    }
+    pinelabs: (() => {
+        // Smart environment detection based on backend URL
+        // No need for NODE_ENV variable!
+        const backendUrl = process.env.BACKEND_API_URL || '';
+        const isProduction = backendUrl.includes('edu-hubbackend.onrender.com') ||
+            backendUrl.includes('eduhub.org.in');
+
+        const environment = isProduction ? 'PRODUCTION' : 'UAT';
+
+        // Production credentials (Merchant ID: 356585)
+        const prodConfig = {
+            mid: '356585',
+            clientId: '25763cef-36c1-4fd0-9429-57a59ba0f4a7',
+            clientSecret: '9dcad7de29444f4fa61ef65b7f31fea6',
+            authUrl: 'https://api.pluralpay.in/api/auth/v1/token',
+            checkoutUrl: 'https://api.pluralpay.in/api/checkout/v1/orders',
+            getOrderUrl: 'https://api.pluralpay.in/api/pay/v1/orders'
+        };
+
+        // UAT credentials (for localhost testing)
+        const uatConfig = {
+            mid: '356585',
+            clientId: '25763cef-36c1-4fd0-9429-57a59ba0f4a7',
+            clientSecret: '9dcad7de29444f4fa61ef65b7f31fea6',
+            authUrl: 'https://pluraluat.v2.pinepg.in/api/auth/v1/token',
+            checkoutUrl: 'https://pluraluat.v2.pinepg.in/api/checkout/v1/orders',
+            getOrderUrl: 'https://pluraluat.v2.pinepg.in/api/pay/v1/orders'
+        };
+
+        // Select config based on environment
+        const config = isProduction ? prodConfig : uatConfig;
+
+        // Add environment info
+        config.environment = environment;
+        config.isProduction = isProduction;
+
+        // Log which environment is active
+        console.log(`[Pine Labs Config] 🌍 Environment: ${environment}`);
+        console.log(`[Pine Labs Config] 🏢 Merchant ID: ${config.mid}`);
+        console.log(`[Pine Labs Config] 🔗 Auth URL: ${config.authUrl}`);
+        console.log(`[Pine Labs Config] 📍 Backend URL: ${backendUrl || 'localhost'}`);
+
+        return config;
+    })()
 };
 
 /**
