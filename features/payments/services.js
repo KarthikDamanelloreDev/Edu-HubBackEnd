@@ -856,8 +856,27 @@ const verifyPayment = async (userId, data) => {
         transaction.gatewayResponse = data;
         await transaction.save();
 
-        await Cart.findOneAndUpdate({ user: transaction.user }, { $set: { items: [] } });
-        console.log(`[Payment Verify] Transaction ${transactionId} successful`);
+        // Clear the cart after successful payment
+        try {
+            const cartUpdateResult = await Cart.findOneAndUpdate(
+                { user: transaction.user },
+                { $set: { items: [] } },
+                { new: true }
+            );
+
+            if (cartUpdateResult) {
+                console.log(`[Payment Verify] 🛒 Cart cleared successfully for user: ${transaction.user}`);
+                console.log(`[Payment Verify] Cart had ${cartUpdateResult.items?.length || 0} items before clearing`);
+            } else {
+                console.log(`[Payment Verify] ⚠️ No cart found for user: ${transaction.user} (might be already empty)`);
+            }
+        } catch (cartError) {
+            // Don't fail the payment if cart clearing fails
+            console.error(`[Payment Verify] ❌ Failed to clear cart for user: ${transaction.user}`, cartError);
+            console.error(`[Payment Verify] Payment was successful but cart clearing failed - manual cleanup may be needed`);
+        }
+
+        console.log(`[Payment Verify] ✅ Transaction ${transactionId} successful`);
         return { status: 'success', message: 'Payment verified successfully', transaction };
     } else {
         transaction.status = 'failed';
