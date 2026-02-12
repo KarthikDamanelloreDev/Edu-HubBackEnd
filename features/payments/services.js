@@ -37,55 +37,21 @@ const PAYMENT_CONFIG = {
         contextPath: process.env.VEGAAH_CONTEXT_PATH || 'CORE_2.2.2',
         merchantIp: process.env.VEGAAH_MERCHANT_IP || '127.0.0.1'
     },
-    pinelabs: (() => {
-        // =============================================================================
-        // PINE LABS CONFIGURATION - USING WORKING UAT CREDENTIALS
-        // =============================================================================
-        // Using the WORKING UAT credentials (111077) for ALL environments
-        // The other credentials (356585) were returning 401 Unauthorized errors
-        // =============================================================================
-
-        // Detect environment based on backend URL (for logging purposes)
-        const backendUrl = process.env.BACKEND_API_URL || '';
-        const isProductionServer = backendUrl.includes('edu-hubbackend.onrender.com') ||
-            backendUrl.includes('eduhub.org.in');
-
-        // WORKING UAT Credentials - Use for ALL environments
-        const config = {
-            mid: '111077',
-            clientId: '59194fe5-4c27-4e6e-8deb-4e59f8f4fd7b',
-            clientSecret: '024dd66a367549b380bd322ff6c3b279',
-            authUrl: 'https://pluraluat.v2.pinepg.in/api/auth/v1/token',
-            checkoutUrl: 'https://pluraluat.v2.pinepg.in/api/checkout/v1/orders',
-            getOrderUrl: 'https://pluraluat.v2.pinepg.in/api/pay/v1/orders',
-            environment: 'UAT',
-            isProduction: false
-        };
-
-        // Log configuration details with clear environment indication
-        console.log('\n' + '='.repeat(80));
-        console.log('🔧 PINE LABS CONFIGURATION LOADED');
-        console.log('='.repeat(80));
-        console.log(`📍 BACKEND_API_URL: ${backendUrl || 'NOT SET (defaulting to localhost)'}`);
-        console.log(`� Server: ${isProductionServer ? 'PRODUCTION (Render)' : 'LOCALHOST (Development)'}`);
-        console.log('─'.repeat(80));
-        console.log('🟡 USING: UAT CREDENTIALS (Working credentials)');
-        console.log('🟡 PAYMENTS: TEST PAYMENTS ONLY');
-        console.log('─'.repeat(80));
-        console.log(`🌍 Environment: ${config.environment}`);
-        console.log(`🏢 Merchant ID: ${config.mid}`);
-        console.log(`🔑 Client ID: ${config.clientId}`);
-        console.log(`🔗 Auth URL: ${config.authUrl}`);
-        console.log(`🛒 Checkout URL: ${config.checkoutUrl}`);
-        console.log(`📦 Get Order URL: ${config.getOrderUrl}`);
-        console.log('='.repeat(80) + '\n');
-
-        return config;
-    })()
+    pinelabs: {
+        // PRODUCTION Credentials - LIVE PAYMENTS
+        mid: '356585',
+        clientId: '25763cef-36c1-4fd0-9429-57a59ba0f4a7',
+        clientSecret: '9dcad7de29444f4fa61ef65b7f31fea6',
+        authUrl: 'https://api.pluralpay.in/api/auth/v1/token',
+        checkoutUrl: 'https://api.pluralpay.in/api/checkout/v1/orders',
+        getOrderUrl: 'https://api.pluralpay.in/api/pay/v1/orders',
+        environment: 'PRODUCTION',
+        isProduction: true
+    }
 };
 
-// Note: Pine Labs credentials are automatically selected based on environment
-// No manual configuration needed - just deploy and it works!
+// Note: Pine Labs is now configured with PRODUCTION credentials for LIVE payments
+// Environment: PRODUCTION | MID: 356585 | URLs: https://api.pluralpay.in
 
 
 /**
