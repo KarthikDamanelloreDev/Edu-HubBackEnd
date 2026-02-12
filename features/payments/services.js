@@ -37,39 +37,37 @@ const PAYMENT_CONFIG = {
         contextPath: process.env.VEGAAH_CONTEXT_PATH || 'CORE_2.2.2',
         merchantIp: process.env.VEGAAH_MERCHANT_IP || '127.0.0.1'
     },
-    pinelabs: (() => {
-        // IMPORTANT: Current credentials (356585) are UAT credentials
-        // They MUST use UAT URLs, not production URLs
-        // When you get real production credentials, update this logic
-
-        const backendUrl = process.env.BACKEND_API_URL || '';
-        const isProductionServer = backendUrl.includes('edu-hubbackend.onrender.com') ||
-            backendUrl.includes('eduhub.org.in');
-
-        // UAT Credentials (Merchant ID: 356585)
-        // These work with UAT URLs only
-        const config = {
-            mid: '356585',
-            clientId: '25763cef-36c1-4fd0-9429-57a59ba0f4a7',
-            clientSecret: '9dcad7de29444f4fa61ef65b7f31fea6',
-            // MUST use UAT URLs because credentials are UAT credentials
-            authUrl: 'https://pluraluat.v2.pinepg.in/api/auth/v1/token',
-            checkoutUrl: 'https://pluraluat.v2.pinepg.in/api/checkout/v1/orders',
-            getOrderUrl: 'https://pluraluat.v2.pinepg.in/api/pay/v1/orders',
-            environment: 'UAT',
-            isProduction: false
-        };
-
-        // Log configuration
-        console.log(`[Pine Labs Config] 🌍 Environment: UAT (Using UAT credentials)`);
-        console.log(`[Pine Labs Config] 🏢 Merchant ID: ${config.mid}`);
-        console.log(`[Pine Labs Config] 🔗 Auth URL: ${config.authUrl}`);
-        console.log(`[Pine Labs Config] 📍 Server: ${isProductionServer ? 'Production (Render)' : 'Localhost'}`);
-        console.log(`[Pine Labs Config] ⚠️  Note: Using UAT credentials - test cards only!`);
-
-        return config;
-    })()
+    pinelabs: {
+        // =============================================================================
+        // PINE LABS UAT CONFIGURATION
+        // =============================================================================
+        // Using UAT (Test) environment for all deployments
+        // Works on both localhost and production server
+        // =============================================================================
+        mid: '111077',
+        clientId: '59194fe5-4c27-4e6e-8deb-4e59f8f4fd7b',
+        clientSecret: '024dd66a367549b380bd322ff6c3b279',
+        authUrl: 'https://pluraluat.v2.pinepg.in/api/auth/v1/token',
+        checkoutUrl: 'https://pluraluat.v2.pinepg.in/api/checkout/v1/orders',
+        getOrderUrl: 'https://pluraluat.v2.pinepg.in/api/pay/v1/orders',
+        environment: 'UAT',
+        isProduction: false
+    }
 };
+
+// Log Pine Labs configuration on startup
+console.log('\n' + '='.repeat(80));
+console.log('🔧 PINE LABS UAT CONFIGURATION LOADED');
+console.log('='.repeat(80));
+console.log(`Merchant ID: ${PAYMENT_CONFIG.pinelabs.mid}`);
+console.log(`Client ID: ${PAYMENT_CONFIG.pinelabs.clientId}`);
+console.log(`Environment: ${PAYMENT_CONFIG.pinelabs.environment}`);
+console.log(`Auth URL: ${PAYMENT_CONFIG.pinelabs.authUrl}`);
+console.log(`Checkout URL: ${PAYMENT_CONFIG.pinelabs.checkoutUrl}`);
+console.log(`Get Order URL: ${PAYMENT_CONFIG.pinelabs.getOrderUrl}`);
+console.log('⚠️  Using UAT credentials - Test payments only!');
+console.log('='.repeat(80) + '\n');
+
 
 /**
  * Generate Pine Labs Hash for X-VERIFY
@@ -436,6 +434,21 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
         console.log("[Pine Labs Order] Response:", JSON.stringify(orderData, null, 2));
 
         if (orderData.response_code === 200 && orderData.redirect_url) {
+            // Store the Pine Labs order_id in the transaction for later lookup
+            console.log('[Pine Labs Order] Storing order_id in transaction...');
+            await Transaction.findOneAndUpdate(
+                { transactionId },
+                {
+                    $set: {
+                        'gatewayResponse.order_id': orderData.order_id,
+                        'gatewayResponse.token': orderData.token,
+                        'gatewayResponse.response_code': orderData.response_code,
+                        'gatewayResponse.response_message': orderData.response_message
+                    }
+                }
+            );
+            console.log('[Pine Labs Order] ✅ Stored Pine Labs order_id:', orderData.order_id);
+
             return {
                 status: 'success',
                 data: {
