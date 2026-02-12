@@ -377,8 +377,10 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
             },
             integration_mode: "REDIRECT",
             pre_auth: false,
-            // IMPORTANT: Pine Labs cannot reach localhost, so always use production backend URL for callback
-            callback_url: `${process.env.BACKEND_API_URL || 'https://edu-hubbackend.onrender.com/api'}/payments/callback?gateway=PINELABS`,
+            // ✅ CALLBACK_URL - Pine Labs redirects user's browser here after payment
+            // According to official docs: "URL to redirect your customers to specific success or failure pages"
+            // This is a BROWSER REDIRECT, not a server-to-server webhook
+            callback_url: `${REDIRECT_URLS.frontendSuccess}&transactionId=${transactionId}`,
             purchase_details: {
                 customer: {
                     email_id: customerDetails.email || "kevin.bob@example.com",
@@ -413,7 +415,7 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
         };
 
         console.log("[Pine Labs Order] Request Body:", JSON.stringify(orderBody, null, 2));
-        console.log("[Pine Labs Order] Callback URL:", orderBody.callback_url);
+        console.log("[Pine Labs Order] Callback URL (user browser redirect):", orderBody.callback_url);
 
         // 3. Create Order
         const orderResp = await fetch(config.checkoutUrl, {
@@ -739,16 +741,26 @@ const verifyPayment = async (userId, data) => {
             isSuccessful = false;
         }
     } else if (transaction.paymentGateway === 'PINELABS' || transaction.paymentGateway === 'pinelabs') {
-        console.log('[Pine Labs Verify] Raw callback data:', JSON.stringify(data, null, 2));
+        console.log('[Pine Labs Verify] Starting Pine Labs verification...');
+        console.log('[Pine Labs Verify] Transaction ID:', transactionId);
+        console.log('[Pine Labs Verify] Raw data:', JSON.stringify(data, null, 2));
 
         // BEST PRACTICE: Verify payment status directly from Pine Labs servers
         // This is more secure than trusting callback data alone
 
-        // Extract Pine Labs order_id from callback data
-        const pineLabsOrderId = data.order_id || data.orderId || (data.order && data.order.order_id);
+        // Extract Pine Labs order_id from:
+        // 1. Verify request data (if provided)
+        // 2. Transaction's gatewayResponse (stored during payment initiation)
+        let pineLabsOrderId = data.order_id || data.orderId || (data.order && data.order.order_id);
+
+        // If not in request data, get from transaction's gatewayResponse
+        if (!pineLabsOrderId && transaction.gatewayResponse && transaction.gatewayResponse.order_id) {
+            pineLabsOrderId = transaction.gatewayResponse.order_id;
+            console.log('[Pine Labs Verify] Retrieved order_id from transaction gatewayResponse:', pineLabsOrderId);
+        }
 
         if (pineLabsOrderId) {
-            console.log(`[Pine Labs Verify] Found Pine Labs order_id: ${pineLabsOrderId}`);
+            console.log(`[Pine Labs Verify] Using Pine Labs order_id: ${pineLabsOrderId}`);
             console.log('[Pine Labs Verify] Fetching order status from Pine Labs API...');
 
             // Call Get Order API to verify status directly from Pine Labs
@@ -756,7 +768,8 @@ const verifyPayment = async (userId, data) => {
 
             if (orderStatusResult.success && orderStatusResult.data) {
                 const orderData = orderStatusResult.data;
-                console.log('[Pine Labs Verify] Server-side verification successful');
+                console.log('[Pine Labs Verify] ✅ Server-side verification successful');
+                console.log('[Pine Labs Verify] API Response:', JSON.stringify(orderData, null, 2));
 
                 // Extract status from API response
                 const apiOrderStatus = orderData.order_status || orderData.status || (orderData.order && orderData.order.status);
@@ -780,12 +793,12 @@ const verifyPayment = async (userId, data) => {
                     apiTransactionStatus === 'SUCCESS'
                 );
 
-                console.log(`[Pine Labs Verify] Server-side verification result: ${isSuccessful}`);
+                console.log(`[Pine Labs Verify] Payment status from Pine Labs API: ${isSuccessful ? 'SUCCESS ✅' : 'FAILED ❌'}`);
 
                 // Store the complete API response for reference
                 data.pineLabsApiResponse = orderData;
             } else {
-                console.warn('[Pine Labs Verify] Server-side verification failed, falling back to callback data');
+                console.warn('[Pine Labs Verify] ⚠️ Server-side verification failed');
                 console.warn('[Pine Labs Verify] Error:', orderStatusResult.error);
 
                 // Fallback: Use callback data if API call fails
@@ -816,7 +829,9 @@ const verifyPayment = async (userId, data) => {
                 );
             }
         } else {
-            console.warn('[Pine Labs Verify] No Pine Labs order_id found in callback, using callback data only');
+            console.warn('[Pine Labs Verify] ⚠️ No Pine Labs order_id found');
+            console.warn('[Pine Labs Verify] Cannot verify with Pine Labs API');
+            console.warn('[Pine Labs Verify] Transaction gatewayResponse:', JSON.stringify(transaction.gatewayResponse, null, 2));
 
             // Fallback: Use callback data when order_id is not available
             const orderStatus = data.order_status || data.orderStatus || (data.order && data.order.status);
@@ -846,7 +861,7 @@ const verifyPayment = async (userId, data) => {
             );
         }
 
-        console.log(`[Pine Labs Verify] Final verification result for ${transactionId}: ${isSuccessful}`);
+        console.log(`[Pine Labs Verify] Final verification result for ${transactionId}: ${isSuccessful ? 'SUCCESS ✅' : 'FAILED ❌'}`);
     } else {
         isSuccessful = data.status === 'success' || data.txStatus === 'SUCCESS' || data.order_status === 'PAID' || data.result === 'success';
     }
