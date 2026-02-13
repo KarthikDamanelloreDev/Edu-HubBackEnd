@@ -3,6 +3,7 @@ const router = express.Router();
 const { initiatePayment, verifyPayment, REDIRECT_URLS } = require('./services');
 const { decryptVegaah } = require('./utils/vegaahCrypto');
 const { OK, CREATED, BAD_REQUEST, INTERNAL_SERVER_ERROR } = require('../../utils/statuscodes');
+const { clearCart } = require('../cart/services');
 
 router.post('/initiate', async (req, res) => {
     try {
@@ -83,8 +84,28 @@ router.all('/callback', async (req, res) => {
 
                 console.log('[Pine Labs Callback] Transaction ID:', transactionId);
 
-                // Simple redirect - no backend verification
-                // Just trust Pine Labs and redirect to frontend
+                // ✅ CLEAR CART IN BACKEND BEFORE REDIRECTING
+                // This ensures cart is cleared regardless of payment success/failure
+                if (transactionId) {
+                    try {
+                        // Find transaction to get user ID
+                        const Transaction = require('../transactions/schema');
+                        const transaction = await Transaction.findOne({ transactionId });
+
+                        if (transaction && transaction.userId) {
+                            console.log('[Pine Labs Callback] 🧹 Clearing cart for user:', transaction.userId);
+                            await clearCart(transaction.userId);
+                            console.log('[Pine Labs Callback] ✅ Cart cleared successfully in backend');
+                        } else {
+                            console.log('[Pine Labs Callback] ⚠️ Transaction or user not found, skipping cart clear');
+                        }
+                    } catch (cartError) {
+                        console.error('[Pine Labs Callback] ❌ Cart clearing error:', cartError.message);
+                        // Continue with redirect even if cart clearing fails
+                    }
+                }
+
+                // Simple redirect - cart already cleared
                 if (transactionId) {
                     console.log('[Pine Labs Callback] ✅ Redirecting to success page');
                     return res.redirect(`${REDIRECT_URLS.frontendSuccess}&transactionId=${transactionId}`);
