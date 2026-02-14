@@ -39,14 +39,24 @@ const PAYMENT_CONFIG = {
     },
     pinelabs: {
         // PRODUCTION Credentials - LIVE PAYMENTS
-        mid: '356585',
-        clientId: '25763cef-36c1-4fd0-9429-57a59ba0f4a7',
-        clientSecret: '9dcad7de29444f4fa61ef65b7f31fea6',
-        authUrl: 'https://api.pluralpay.in/api/auth/v1/token',
-        checkoutUrl: 'https://api.pluralpay.in/api/checkout/v1/orders',
-        getOrderUrl: 'https://api.pluralpay.in/api/pay/v1/orders',
-        environment: 'PRODUCTION',
-        isProduction: true
+        // mid: '356585',
+        // clientId: '25763cef-36c1-4fd0-9429-57a59ba0f4a7',
+        // clientSecret: '9dcad7de29444f4fa61ef65b7f31fea6',
+        // authUrl: 'https://api.pluralpay.in/api/auth/v1/token',
+        // checkoutUrl: 'https://api.pluralpay.in/api/checkout/v1/orders',
+        // getOrderUrl: 'https://api.pluralpay.in/api/pay/v1/orders',
+        // environment: 'PRODUCTION',
+        // isProduction: true
+
+
+        mid: '111077',
+        clientId: '59194fe5-4c27-4e6e-8deb-4e59f8f4fd7b',
+        clientSecret: '024dd66a367549b380bd322ff6c3b279',
+        authUrl: 'https://pluraluat.v2.pinepg.in/api/auth/v1/token',
+        checkoutUrl: 'https://pluraluat.v2.pinepg.in/api/checkout/v1/orders',
+        getOrderUrl: 'https://pluraluat.v2.pinepg.in/api/pay/v1/orders',
+        environment: 'UAT',
+        isProduction: false
     }
 };
 
@@ -448,6 +458,23 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
                 }
             );
             console.log('[Pine Labs Order] ✅ Stored Pine Labs order_id:', orderData.order_id);
+
+            // ✅ CLEAR CART IMMEDIATELY BEFORE REDIRECTING TO PAYMENT GATEWAY
+            // This ensures cart is cleared when user is sent to Pine Labs, not after payment completion
+            console.log('[Pine Labs Order] 🧹 Clearing cart before redirecting to payment gateway...');
+            try {
+                await Cart.findOneAndUpdate(
+                    { user: userId },
+                    { $set: { items: [] } },
+                    { new: true }
+                );
+                console.log('[Pine Labs Order] ✅ Cart cleared successfully for user:', userId);
+                console.log('[Pine Labs Order] 💡 Cart cleared BEFORE redirect - items will not persist after payment');
+            } catch (cartError) {
+                console.error('[Pine Labs Order] ⚠️ Failed to clear cart:', cartError.message);
+                // Continue with payment even if cart clearing fails
+                console.log('[Pine Labs Order] ⚠️ Continuing with payment despite cart clearing error');
+            }
 
             return {
                 status: 'success',

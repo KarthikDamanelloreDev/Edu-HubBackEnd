@@ -71,8 +71,12 @@ const removeFromCart = async (userId, courseId) => {
 const clearCart = async (userId) => {
     let cart = await Cart.findOne({ user: userId });
     if (cart) {
+        const itemCountBeforeClearing = cart.items.length;
         cart.items = [];
         await cart.save();
+        // Add metadata about what was cleared
+        cart._wasAlreadyEmpty = itemCountBeforeClearing === 0;
+        cart._itemsCleared = itemCountBeforeClearing;
     }
     return cart;
 };

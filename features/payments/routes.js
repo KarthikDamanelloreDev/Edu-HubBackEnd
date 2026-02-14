@@ -84,39 +84,80 @@ router.all('/callback', async (req, res) => {
 
                 console.log('[Pine Labs Callback] Transaction ID:', transactionId);
 
-                // ✅ CLEAR CART IN BACKEND BEFORE REDIRECTING
-                // This ensures cart is cleared regardless of payment success/failure
+                // ✅ STEP 1: VERIFY PAYMENT STATUS WITH PINE LABS API
+                // This updates the transaction status from 'pending' to 'success' or 'failed'
+                let verificationSuccess = false;
+                if (transactionId) {
+                    try {
+                        console.log('[Pine Labs Callback] 🔍 Verifying payment status with Pine Labs API...');
+
+                        // Call verifyPayment which will:
+                        // 1. Fetch order status from Pine Labs API
+                        // 2. Update transaction status to 'success' or 'failed'
+                        // 3. Clear cart if successful
+                        const verifyResult = await verifyPayment(null, {
+                            transactionId,
+                            ...data
+                        });
+
+                        verificationSuccess = verifyResult.status === 'success';
+                        console.log('[Pine Labs Callback] ✅ Payment verification completed:', verificationSuccess ? 'SUCCESS' : 'FAILED');
+                    } catch (verifyError) {
+                        console.error('[Pine Labs Callback] ❌ Payment verification error:', verifyError.message);
+                        // Continue with redirect even if verification fails
+                        // The frontend can retry verification
+                    }
+                }
+
+                // ✅ STEP 2: BACKUP CART CLEARING (Safety Mechanism)
+                // Note: Cart should already be cleared during payment initiation (in initiatePineLabsPayment)
+                // AND in verifyPayment if payment was successful
+                // This is a final safety backup
                 if (transactionId) {
                     try {
                         // Find transaction to get user ID
                         const Transaction = require('../transactions/schema');
                         const transaction = await Transaction.findOne({ transactionId });
 
-                        if (transaction && transaction.userId) {
-                            console.log('[Pine Labs Callback] 🧹 Clearing cart for user:', transaction.userId);
-                            await clearCart(transaction.userId);
-                            console.log('[Pine Labs Callback] ✅ Cart cleared successfully in backend');
+                        if (transaction && transaction.user) {
+                            console.log('[Pine Labs Callback] 🔍 Checking if cart needs backup clearing for user:', transaction.user);
+                            const cartResult = await clearCart(transaction.user);
+
+                            if (cartResult && cartResult._itemsCleared > 0) {
+                                console.log('[Pine Labs Callback] ⚠️ Cart had', cartResult._itemsCleared, 'items - backup clearing was necessary!');
+                                console.log('[Pine Labs Callback] ⚠️ This means cart was NOT cleared during payment initiation or verification');
+                                console.log('[Pine Labs Callback] ✅ Backup cart clear completed');
+                            } else {
+                                console.log('[Pine Labs Callback] ✅ Cart was already empty (cleared during payment initiation or verification)');
+                            }
                         } else {
-                            console.log('[Pine Labs Callback] ⚠️ Transaction or user not found, skipping cart clear');
+                            console.log('[Pine Labs Callback] ⚠️ Transaction or user not found, skipping backup cart clear');
                         }
                     } catch (cartError) {
-                        console.error('[Pine Labs Callback] ❌ Cart clearing error:', cartError.message);
+                        console.error('[Pine Labs Callback] ❌ Backup cart clearing error:', cartError.message);
                         // Continue with redirect even if cart clearing fails
                     }
                 }
 
-                // Simple redirect - cart already cleared
+                // ✅ STEP 3: REDIRECT TO FRONTEND
+                // Redirect based on verification result
                 if (transactionId) {
-                    console.log('[Pine Labs Callback] ✅ Redirecting to success page');
-                    return res.redirect(`${REDIRECT_URLS.frontendSuccess}&transactionId=${transactionId}`);
+                    if (verificationSuccess) {
+                        console.log('[Pine Labs Callback] ✅ Redirecting to SUCCESS page');
+                        return res.redirect(`${REDIRECT_URLS.frontendSuccess}&transactionId=${transactionId}`);
+                    } else {
+                        console.log('[Pine Labs Callback] ⚠️ Redirecting to FAILURE page (verification failed or pending)');
+                        return res.redirect(`${REDIRECT_URLS.frontendFailure}&transactionId=${transactionId}&message=Payment verification failed or pending`);
+                    }
                 } else {
-                    console.log('[Pine Labs Callback] ⚠️ No transaction ID, redirecting to success anyway');
-                    return res.redirect(`${REDIRECT_URLS.frontendSuccess}`);
+                    console.log('[Pine Labs Callback] ⚠️ No transaction ID, redirecting to failure page');
+                    return res.redirect(`${REDIRECT_URLS.frontendFailure}&message=Transaction ID not found`);
                 }
             } catch (e) {
                 console.error('[Pine Labs Callback] ❌ ERROR:', e.message);
-                // On error, still redirect to success - user can check their dashboard
-                return res.redirect(`${REDIRECT_URLS.frontendSuccess}`);
+                console.error('[Pine Labs Callback] ❌ Stack:', e.stack);
+                // On error, redirect to failure page
+                return res.redirect(`${REDIRECT_URLS.frontendFailure}&message=${encodeURIComponent(e.message)}`);
             }
         }
 
