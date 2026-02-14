@@ -45,7 +45,11 @@ const transactionSchema = new mongoose.Schema({
         state: String,
         zip: String,
         country: String
-    }
+    },
+    // Top-level fields for easy identification in Admin Panel (especially for gift purchases)
+    customerName: String,
+    customerEmail: String,
+    customerPhone: String
 }, { timestamps: true });
 
 module.exports = mongoose.model('Transaction', transactionSchema);

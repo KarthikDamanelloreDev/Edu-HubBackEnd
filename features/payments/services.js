@@ -175,6 +175,10 @@ const initiateVegaahPayment = async (payload, userId, ipAddress) => {
         totalAmount: amount,
         paymentGateway: "VEGAAH",
         customerDetails: payload.customerDetails,
+        // ✅ Saving checkout details as top-level fields for Admin Dashboard identification
+        customerName: `${payload.customerDetails?.firstName || ""} ${payload.customerDetails?.lastName || "User"}`.trim(),
+        customerEmail: payload.customerDetails?.email,
+        customerPhone: payload.customerDetails?.phone,
         status: "INITIATED"
     });
 
@@ -513,6 +517,10 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
         transactionId,
         paymentGateway: data.paymentMethod,
         customerDetails: data.customerDetails,
+        // ✅ Saving checkout details as top-level fields for Admin Dashboard identification
+        customerName: `${data.customerDetails?.firstName || ""} ${data.customerDetails?.lastName || "User"}`.trim(),
+        customerEmail: data.customerDetails?.email,
+        customerPhone: data.customerDetails?.phone,
         status: 'pending'
     });
     await transaction.save();
