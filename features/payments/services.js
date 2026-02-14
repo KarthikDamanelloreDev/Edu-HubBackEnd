@@ -746,7 +746,15 @@ const initiatePayment = async (userId, data, ipAddress = '127.0.0.1') => {
 const verifyPayment = async (userId, data) => {
     console.log("[Payment Verify] Data received:", JSON.stringify(data));
 
-    const transactionId = data.txnid || data.order_id || data.transactionId || data.orderId;
+    // ✅ FIX: Prioritize explicit transactionId or our merchant_order_reference
+    // Pine Labs sends our TXN... ID as 'merchant_order_reference'
+    const transactionId = data.transactionId ||
+        data.merchant_order_reference ||
+        data.ppc_UniqueMerchantTxnID ||
+        data.txnid ||
+        data.order_id ||
+        data.orderId;
+
     const transaction = await Transaction.findOne({ transactionId });
 
     if (!transaction) {
@@ -770,124 +778,63 @@ const verifyPayment = async (userId, data) => {
             isSuccessful = false;
         }
     } else if (transaction.paymentGateway === 'PINELABS' || transaction.paymentGateway === 'pinelabs') {
-        console.log('[Pine Labs Verify] Starting Pine Labs verification...');
-        console.log('[Pine Labs Verify] Transaction ID:', transactionId);
-        console.log('[Pine Labs Verify] Raw data:', JSON.stringify(data, null, 2));
+        console.log('[Pine Labs Verify] 🔍 Verifying Pine Labs Payment...');
 
-        // BEST PRACTICE: Verify payment status directly from Pine Labs servers
-        // This is more secure than trusting callback data alone
-
-        // Extract Pine Labs order_id from:
-        // 1. Verify request data (if provided)
-        // 2. Transaction's gatewayResponse (stored during payment initiation)
+        // 1. Try to verify using Pine Labs Get Order API (Most Reliable)
         let pineLabsOrderId = data.order_id || data.orderId || (data.order && data.order.order_id);
 
-        // If not in request data, get from transaction's gatewayResponse
         if (!pineLabsOrderId && transaction.gatewayResponse && transaction.gatewayResponse.order_id) {
             pineLabsOrderId = transaction.gatewayResponse.order_id;
-            console.log('[Pine Labs Verify] Retrieved order_id from transaction gatewayResponse:', pineLabsOrderId);
         }
 
         if (pineLabsOrderId) {
-            console.log(`[Pine Labs Verify] Using Pine Labs order_id: ${pineLabsOrderId}`);
-            console.log('[Pine Labs Verify] Fetching order status from Pine Labs API...');
+            try {
+                console.log(`[Pine Labs Verify] 📡 Fetching server-side status for: ${pineLabsOrderId}`);
+                const orderStatusResult = await getPineLabsOrderStatus(pineLabsOrderId);
 
-            // Call Get Order API to verify status directly from Pine Labs
-            const orderStatusResult = await getPineLabsOrderStatus(pineLabsOrderId);
+                if (orderStatusResult.success && orderStatusResult.data) {
+                    const orderData = orderStatusResult.data;
+                    const apiOrderStatus = (orderData.order_status || orderData.status || (orderData.order && orderData.order.status) || "").toUpperCase();
+                    const apiPaymentStatus = (orderData.payment_status || (orderData.payment && orderData.payment.status) || "").toUpperCase();
+                    const apiTransactionStatus = (orderData.transaction_status || "").toUpperCase();
 
-            if (orderStatusResult.success && orderStatusResult.data) {
-                const orderData = orderStatusResult.data;
-                console.log('[Pine Labs Verify] ✅ Server-side verification successful');
-                console.log('[Pine Labs Verify] API Response:', JSON.stringify(orderData, null, 2));
+                    console.log(`[Pine Labs Verify] API Status: Order=${apiOrderStatus}, Payment=${apiPaymentStatus}, Txn=${apiTransactionStatus}`);
 
-                // Extract status from API response
-                const apiOrderStatus = orderData.order_status || orderData.status || (orderData.order && orderData.order.status);
-                const apiPaymentStatus = orderData.payment_status || (orderData.payment && orderData.payment.status);
-                const apiTransactionStatus = orderData.transaction_status;
+                    // Check for any success indicators (Case-Insensitive)
+                    isSuccessful = [
+                        'PAID', 'CHARGED', 'PROCESSED', 'SUCCESS', 'CAPTURED', 'COMPLETE', 'COMPLETED', 'AUTHORIZED', 'SUCCESSFUL', 'APPROVED', '4'
+                    ].some(s => apiOrderStatus === s || apiPaymentStatus === s || apiTransactionStatus === s);
 
-                console.log('[Pine Labs Verify] API Response Statuses:', {
-                    apiOrderStatus,
-                    apiPaymentStatus,
-                    apiTransactionStatus
-                });
-
-                // Verify using API response (most reliable)
-                isSuccessful = (
-                    apiOrderStatus === 'PAID' ||
-                    apiOrderStatus === 'CHARGED' ||
-                    apiOrderStatus === 'PROCESSED' ||
-                    apiOrderStatus === 'SUCCESS' ||
-                    apiPaymentStatus === 'CAPTURED' ||
-                    apiPaymentStatus === 'SUCCESS' ||
-                    apiTransactionStatus === 'SUCCESS'
-                );
-
-                console.log(`[Pine Labs Verify] Payment status from Pine Labs API: ${isSuccessful ? 'SUCCESS ✅' : 'FAILED ❌'}`);
-
-                // Store the complete API response for reference
-                data.pineLabsApiResponse = orderData;
-            } else {
-                console.warn('[Pine Labs Verify] ⚠️ Server-side verification failed');
-                console.warn('[Pine Labs Verify] Error:', orderStatusResult.error);
-
-                // Fallback: Use callback data if API call fails
-                const orderStatus = data.order_status || data.orderStatus || (data.order && data.order.status);
-                const paymentStatus = data.payment_status || data.paymentStatus || (data.payment && data.payment.status);
-                const transactionStatus = data.transaction_status || data.transactionStatus;
-                const responseCode = data.response_code || data.responseCode;
-                const status = data.status;
-
-                console.log('[Pine Labs Verify] Callback data statuses:', {
-                    orderStatus,
-                    paymentStatus,
-                    transactionStatus,
-                    responseCode,
-                    status
-                });
-
-                isSuccessful = (
-                    orderStatus === 'PAID' ||
-                    orderStatus === 'CHARGED' ||
-                    orderStatus === 'SUCCESS' ||
-                    paymentStatus === 'CAPTURED' ||
-                    paymentStatus === 'SUCCESS' ||
-                    transactionStatus === 'SUCCESS' ||
-                    status === 'SUCCESS' ||
-                    responseCode === 200 ||
-                    responseCode === '200'
-                );
+                    if (isSuccessful) {
+                        console.log('[Pine Labs Verify] ✅ Success confirmed via API');
+                        data.pineLabsApiResponse = orderData; // Record the proof
+                    }
+                }
+            } catch (apiErr) {
+                console.error('[Pine Labs Verify] ❌ API Status check failed:', apiErr.message);
             }
-        } else {
-            console.warn('[Pine Labs Verify] ⚠️ No Pine Labs order_id found');
-            console.warn('[Pine Labs Verify] Cannot verify with Pine Labs API');
-            console.warn('[Pine Labs Verify] Transaction gatewayResponse:', JSON.stringify(transaction.gatewayResponse, null, 2));
+        }
 
-            // Fallback: Use callback data when order_id is not available
-            const orderStatus = data.order_status || data.orderStatus || (data.order && data.order.status);
-            const paymentStatus = data.payment_status || data.paymentStatus || (data.payment && data.payment.status);
-            const transactionStatus = data.transaction_status || data.transactionStatus;
+        // 2. Fallback: Check callback data if API check didn't confirm success
+        if (!isSuccessful) {
+            console.log('[Pine Labs Verify] ℹ️ Falling back to callback parameters check');
+            const orderStatus = (data.order_status || data.orderStatus || (data.order && data.order.status) || "").toUpperCase();
+            const paymentStatus = (data.payment_status || data.paymentStatus || (data.payment && data.payment.status) || "").toUpperCase();
+            const transactionStatus = (data.transaction_status || data.transactionStatus || "").toUpperCase();
+            const status = (data.status || "").toUpperCase();
+            const ppcStatus = (data.ppc_Status || "").toString().toUpperCase();
+            const ppcParentStatus = (data.ppc_Parent_TxnStatus || "").toString().toUpperCase();
             const responseCode = data.response_code || data.responseCode;
-            const status = data.status;
 
-            console.log('[Pine Labs Verify] Callback data statuses:', {
-                orderStatus,
-                paymentStatus,
-                transactionStatus,
-                responseCode,
-                status
-            });
+            console.log(`[Pine Labs Verify] Parameters: Order=${orderStatus}, Payment=${paymentStatus}, Status=${status}, PPC=${ppcStatus}, ParentPPC=${ppcParentStatus}, Code=${responseCode}`);
 
-            isSuccessful = (
-                orderStatus === 'PAID' ||
-                orderStatus === 'CHARGED' ||
-                orderStatus === 'SUCCESS' ||
-                paymentStatus === 'CAPTURED' ||
-                paymentStatus === 'SUCCESS' ||
-                transactionStatus === 'SUCCESS' ||
-                status === 'SUCCESS' ||
-                responseCode === 200 ||
-                responseCode === '200'
-            );
+            isSuccessful = [
+                'PAID', 'CHARGED', 'SUCCESS', 'CAPTURED', 'COMPLETE', 'COMPLETED', 'AUTHORIZED', 'SUCCESSFUL', 'APPROVED', '4'
+            ].some(s =>
+                orderStatus === s || paymentStatus === s || transactionStatus === s || status === s || ppcStatus === s || ppcParentStatus === s
+            ) || [200, '200', 0, '0', 1, '1', 4, '4'].includes(responseCode);
+
+            if (isSuccessful) console.log('[Pine Labs Verify] ✅ Success confirmed via callback params');
         }
 
         console.log(`[Pine Labs Verify] Final verification result for ${transactionId}: ${isSuccessful ? 'SUCCESS ✅' : 'FAILED ❌'}`);
