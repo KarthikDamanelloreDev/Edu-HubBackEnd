@@ -11,7 +11,25 @@ const getCart = async (userId) => {
     if (!cart) {
         cart = new Cart({ user: userId, items: [] });
         await cart.save();
+        return cart;
     }
+
+    // 🔧 CLEANUP: Remove ghost items (items with null/undefined course references)
+    // This happens when a course is deleted but cart still has reference to it
+    const originalItemCount = cart.items.length;
+    const validItems = cart.items.filter(item => item.course != null);
+
+    if (validItems.length < originalItemCount) {
+        const ghostItemCount = originalItemCount - validItems.length;
+        console.log(`[Cart Cleanup] 🧹 Found ${ghostItemCount} ghost item(s) in cart for user ${userId}`);
+        console.log(`[Cart Cleanup] Removing invalid course references...`);
+
+        cart.items = validItems;
+        await cart.save();
+
+        console.log(`[Cart Cleanup] ✅ Cart cleaned - ${validItems.length} valid items remaining`);
+    }
+
     return cart;
 };
 
@@ -23,14 +41,28 @@ const addToCart = async (userId, courseId) => {
         throw new Error('Course not found');
     }
 
-    let cart = await Cart.findOne({ user: userId });
+    let cart = await Cart.findOne({ user: userId }).populate('items.course');
 
     if (!cart) {
         cart = new Cart({ user: userId, items: [] });
     }
 
-    // Check if item already exists using MongoDB _id
-    const isItemExist = cart.items.some(item => item.course.toString() === course._id.toString());
+    // 🔧 CLEANUP: Remove ghost items before checking for duplicates
+    // This prevents false "already in cart" errors
+    const originalItemCount = cart.items.length;
+    const validItems = cart.items.filter(item => item.course != null);
+
+    if (validItems.length < originalItemCount) {
+        const ghostItemCount = originalItemCount - validItems.length;
+        console.log(`[Add to Cart] 🧹 Found ${ghostItemCount} ghost item(s), cleaning before adding...`);
+        cart.items = validItems;
+    }
+
+    // Check if item already exists using MongoDB _id (only check valid items)
+    const isItemExist = cart.items.some(item =>
+        item.course && item.course._id && item.course._id.toString() === course._id.toString()
+    );
+
     if (isItemExist) {
         throw new Error('Course already in cart');
     }
@@ -39,7 +71,9 @@ const addToCart = async (userId, courseId) => {
     cart.items.push({ course: course._id });
     await cart.save();
 
-    // Return populated cart
+    console.log(`[Add to Cart] ✅ Added course ${courseId} to cart for user ${userId}`);
+
+    // Return populated cart (getCart will do final cleanup if needed)
     return await getCart(userId);
 };
 
