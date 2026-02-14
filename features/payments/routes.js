@@ -197,4 +197,109 @@ router.post('/verify', async (req, res) => {
     }
 });
 
+// 🆕 Pine Labs: Manual Transaction Status Check & Update
+// This endpoint allows manual verification of Pine Labs transactions
+// Useful for fixing stuck "pending" transactions
+router.post('/pinelabs/check-status/:transactionId', async (req, res) => {
+    try {
+        const { transactionId } = req.params;
+
+        console.log('================================================================================');
+        console.log('🔍 MANUAL PINE LABS STATUS CHECK');
+        console.log('================================================================================');
+        console.log('Transaction ID:', transactionId);
+
+        // Find the transaction
+        const Transaction = require('../transactions/schema');
+        const transaction = await Transaction.findOne({ transactionId });
+
+        if (!transaction) {
+            console.error('❌ Transaction not found:', transactionId);
+            return res.status(NOT_FOUND).json({
+                status: 'error',
+                message: 'Transaction not found'
+            });
+        }
+
+        console.log('Current Status:', transaction.status);
+        console.log('Payment Gateway:', transaction.paymentGateway);
+        console.log('Gateway Response:', JSON.stringify(transaction.gatewayResponse, null, 2));
+
+        // Verify it's a Pine Labs transaction
+        if (transaction.paymentGateway !== 'pinelabs' && transaction.paymentGateway !== 'PINELABS') {
+            return res.status(BAD_REQUEST).json({
+                status: 'error',
+                message: 'This endpoint is only for Pine Labs transactions'
+            });
+        }
+
+        // If already successful, no need to check again
+        if (transaction.status === 'success') {
+            console.log('✅ Transaction already marked as successful');
+            return res.status(OK).json({
+                status: 'success',
+                message: 'Transaction already verified as successful',
+                transaction: {
+                    transactionId: transaction.transactionId,
+                    status: transaction.status,
+                    amount: transaction.totalAmount,
+                    gateway: transaction.paymentGateway
+                }
+            });
+        }
+
+        // Call verifyPayment to check with Pine Labs API
+        console.log('🔄 Checking status with Pine Labs API...');
+
+        try {
+            const verifyResult = await verifyPayment(null, {
+                transactionId: transactionId
+            });
+
+            console.log('✅ Verification completed:', verifyResult.status);
+            console.log('================================================================================');
+
+            // Reload transaction to get updated status
+            const updatedTransaction = await Transaction.findOne({ transactionId });
+
+            return res.status(OK).json({
+                status: 'success',
+                message: 'Transaction status updated successfully',
+                transaction: {
+                    transactionId: updatedTransaction.transactionId,
+                    status: updatedTransaction.status,
+                    amount: updatedTransaction.totalAmount,
+                    gateway: updatedTransaction.paymentGateway,
+                    updatedAt: updatedTransaction.updatedAt
+                },
+                verificationResult: verifyResult
+            });
+
+        } catch (verifyError) {
+            console.error('❌ Verification failed:', verifyError.message);
+            console.log('================================================================================');
+
+            return res.status(INTERNAL_SERVER_ERROR).json({
+                status: 'error',
+                message: 'Failed to verify transaction with Pine Labs',
+                error: verifyError.message,
+                transaction: {
+                    transactionId: transaction.transactionId,
+                    status: transaction.status,
+                    amount: transaction.totalAmount
+                }
+            });
+        }
+
+    } catch (error) {
+        console.error('Manual Status Check Error:', error);
+        console.log('================================================================================');
+
+        res.status(INTERNAL_SERVER_ERROR).json({
+            status: 'error',
+            message: error.message || 'Failed to check transaction status'
+        });
+    }
+});
+
 module.exports = router;
