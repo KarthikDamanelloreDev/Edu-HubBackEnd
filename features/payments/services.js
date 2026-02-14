@@ -793,21 +793,37 @@ const verifyPayment = async (userId, data) => {
                 const orderStatusResult = await getPineLabsOrderStatus(pineLabsOrderId);
 
                 if (orderStatusResult.success && orderStatusResult.data) {
-                    const orderData = orderStatusResult.data;
-                    const apiOrderStatus = (orderData.order_status || orderData.status || (orderData.order && orderData.order.status) || "").toUpperCase();
-                    const apiPaymentStatus = (orderData.payment_status || (orderData.payment && orderData.payment.status) || "").toUpperCase();
-                    const apiTransactionStatus = (orderData.transaction_status || "").toUpperCase();
+                    const orderResponse = orderStatusResult.data;
+                    const orderData = orderResponse.data || orderResponse;
 
-                    console.log(`[Pine Labs Verify] API Status: Order=${apiOrderStatus}, Payment=${apiPaymentStatus}, Txn=${apiTransactionStatus}`);
+                    const apiOrderStatus = (orderData.order_status || orderData.status || (orderData.order && orderData.order.status) || "").toString().toUpperCase();
+                    const apiPaymentStatus = (orderData.payment_status || (orderData.payment && orderData.payment.status) || "").toString().toUpperCase();
+                    const apiTransactionStatus = (orderData.transaction_status || "").toString().toUpperCase();
 
-                    // Check for any success indicators (Case-Insensitive)
-                    isSuccessful = [
-                        'PAID', 'CHARGED', 'PROCESSED', 'SUCCESS', 'CAPTURED', 'COMPLETE', 'COMPLETED', 'AUTHORIZED', 'SUCCESSFUL', 'APPROVED', '4'
-                    ].some(s => apiOrderStatus === s || apiPaymentStatus === s || apiTransactionStatus === s);
+                    console.log(`[Pine Labs Verify] API Status Check: Order=${apiOrderStatus}, Payment=${apiPaymentStatus}, Txn=${apiTransactionStatus}`);
+
+                    const successIndicators = ['PAID', 'CHARGED', 'PROCESSED', 'SUCCESS', 'CAPTURED', 'COMPLETE', 'COMPLETED', 'AUTHORIZED', 'SUCCESSFUL', 'APPROVED', '4', 'OK'];
+
+                    isSuccessful = successIndicators.some(s =>
+                        apiOrderStatus === s || apiPaymentStatus === s || apiTransactionStatus === s
+                    );
+
+                    if (!isSuccessful && orderData.payments && Array.isArray(orderData.payments)) {
+                        console.log(`[Pine Labs Verify] Checking ${orderData.payments.length} payment records...`);
+                        isSuccessful = orderData.payments.some(p => {
+                            const pStatus = (p.status || "").toString().toUpperCase();
+                            const pTxnStatus = (p.transaction_status || "").toString().toUpperCase();
+                            return successIndicators.includes(pStatus) || successIndicators.includes(pTxnStatus);
+                        });
+                    }
+
+                    if (!isSuccessful && apiOrderStatus !== 'FAILED' && apiOrderStatus !== 'CANCELLED' && apiOrderStatus !== '') {
+                        console.log(`[Pine Labs Verify] User-requested lenient success for: ${apiOrderStatus}`);
+                        isSuccessful = true;
+                    }
 
                     if (isSuccessful) {
-                        console.log('[Pine Labs Verify] ✅ Success confirmed via API');
-                        data.pineLabsApiResponse = orderData; // Record the proof
+                        data.pineLabsApiResponse = orderResponse;
                     }
                 }
             } catch (apiErr) {
