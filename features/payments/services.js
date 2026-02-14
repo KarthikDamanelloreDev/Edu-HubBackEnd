@@ -387,10 +387,11 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
             },
             integration_mode: "REDIRECT",
             pre_auth: false,
-            // ✅ CALLBACK_URL - Pine Labs redirects user's browser here after payment
-            // According to official docs: "URL to redirect your customers to specific success or failure pages"
-            // This is a BROWSER REDIRECT, not a server-to-server webhook
-            callback_url: `${REDIRECT_URLS.frontendSuccess}&transactionId=${transactionId}`,
+            // ✅ CRITICAL: callback_url MUST point to BACKEND callback handler
+            // Pine Labs will redirect user's browser to this URL after payment
+            // Backend will verify payment status, update DB, then redirect to frontend
+            // DO NOT point directly to frontend - verification will be skipped!
+            callback_url: `${REDIRECT_URLS.callback}?gateway=PINELABS&merchant_order_reference=${transactionId}`,
             purchase_details: {
                 customer: {
                     email_id: customerDetails.email || "kevin.bob@example.com",
@@ -425,7 +426,8 @@ const initiatePineLabsPayment = async (userId, transactionId, amount, customerDe
         };
 
         console.log("[Pine Labs Order] Request Body:", JSON.stringify(orderBody, null, 2));
-        console.log("[Pine Labs Order] Callback URL (user browser redirect):", orderBody.callback_url);
+        console.log("[Pine Labs Order] Callback URL (backend verification endpoint):", orderBody.callback_url);
+        console.log("[Pine Labs Order] 💡 Flow: Pine Labs → Backend Callback → Verify → Update DB → Redirect to Frontend");
 
         // 3. Create Order
         const orderResp = await fetch(config.checkoutUrl, {
